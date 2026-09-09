@@ -1,0 +1,3 @@
+_out/
+*.env
+!deploy/example.env

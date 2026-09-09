@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Morpheus Omni provider">
+  <rect width="96" height="96" rx="18" fill="#18222e"/>
+  <circle cx="48" cy="48" r="30" fill="none" stroke="#f2f5f7" stroke-width="4"/>
+  <path d="M33 64 L33 33 L48 51 L63 33 L63 64" fill="none" stroke="#01a982" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

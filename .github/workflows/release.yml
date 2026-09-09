@@ -1,0 +1,244 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+  # Dry run: builds the container and binaries exactly as a real release would,
+  # but publishes nothing. Use this to validate the pipeline without creating a
+  # tag, a GitHub release, or a container image.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Reuse the same quality gates as ci.yml so a tag can never publish something
+  # that would have failed CI.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Build and publish release
+    needs: test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # create the GitHub release
+      packages: write # push the container image to GHCR
+      id-token: write # keyless container signing with cosign
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes are generated from history
+
+      - name: Derive version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          else
+            version="dev-${GITHUB_SHA::7}"
+            publish=false
+          fi
+
+          # A hyphen in the semver tag (v1.2.3-alpha.1) marks a prerelease, so
+          # it does not become :latest and is flagged as such on the release.
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          {
+            echo "version=${version}"
+            echo "publish=${publish}"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Building version ${version} (publish=${publish}, prerelease=${prerelease})"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: steps.version.outputs.publish == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive container metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' && steps.version.outputs.publish == 'true' }}
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.publish == 'false' }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # The provider only talks to the Omni and Morpheus APIs, so the
+      # container itself runs anywhere even though the Talos VMs it provisions
+      # are amd64-only.
+      - name: Build and publish container
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.version.outputs.publish == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        if: steps.version.outputs.publish == 'true'
+        # cosign-installer publishes only exact semver tags, no floating major
+        # ref, so this must be pinned precisely. Dependabot keeps it current.
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign container image
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          # Keyless signing depends on Sigstore's public Fulcio, Rekor and
+          # timestamp services. Those are ordinarily reliable but do drop
+          # connections: v0.1.0-alpha.3 failed on
+          # "Post https://timestamp.sigstore.dev/api/v1/timestamp:
+          # connection reset by peer", which aborted the release after the
+          # image had already been pushed, leaving it published but unsigned
+          # and skipping the binaries and the GitHub release entirely.
+          # Retry before giving up, since the failure is almost always
+          # transient and the cost of a false failure is a half-published
+          # release.
+          for attempt in 1 2 3 4 5; do
+            if cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"; then
+              echo "signed on attempt ${attempt}"
+              exit 0
+            fi
+
+            if [[ "${attempt}" == 5 ]]; then
+              echo "::error::cosign failed after ${attempt} attempts"
+              exit 1
+            fi
+
+            delay=$((attempt * 15))
+            echo "::warning::cosign attempt ${attempt} failed, retrying in ${delay}s"
+            sleep "${delay}"
+          done
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release binaries
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p _out/dist
+
+          for platform in linux/amd64 linux/arm64; do
+            goos="${platform%/*}"
+            goarch="${platform#*/}"
+            name="omni-infra-provider-morpheus_${VERSION}_${goos}_${goarch}"
+
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+              -trimpath \
+              -ldflags="-s -w -X main.version=${VERSION}" \
+              -o "_out/${name}/omni-infra-provider-morpheus" \
+              ./cmd/omni-infra-provider-morpheus
+
+            cp LICENSE NOTICE.md README.md "_out/${name}/"
+            tar -czf "_out/dist/${name}.tar.gz" -C _out "${name}"
+          done
+
+          cd _out/dist
+          sha256sum ./*.tar.gz > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Upload dry-run artifacts
+        if: steps.version.outputs.publish == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: _out/dist/
+          retention-days: 7
+
+      - name: Create GitHub release
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          cat > _out/notes.md <<EOF
+          ## Container image
+
+          \`\`\`
+          ${REGISTRY}/${IMAGE_NAME}:${VERSION}
+          \`\`\`
+
+          Pin the immutable digest in production:
+
+          \`\`\`
+          ${REGISTRY}/${IMAGE_NAME}@${DIGEST}
+          \`\`\`
+
+          The image is built for \`linux/amd64\` and \`linux/arm64\`, ships an SBOM and
+          max-mode provenance, and is signed with cosign. Verify it with:
+
+          \`\`\`bash
+          cosign verify "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" \\
+            --certificate-identity-regexp "^https://github.com/${IMAGE_NAME}/" \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+
+          Verify the binary archives with \`sha256sums.txt\`.
+
+          See [Compatibility and limitations](https://github.com/${IMAGE_NAME}/blob/${GITHUB_REF_NAME}/docs/compatibility.md)
+          for tested Omni, Morpheus, and Talos versions.
+          EOF
+
+          args=(--notes-file _out/notes.md --generate-notes --verify-tag)
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "${GITHUB_REF_NAME}" "${args[@]}" _out/dist/*

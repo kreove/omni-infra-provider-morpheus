@@ -1,0 +1,21 @@
+# Example Omni cluster template using the Morpheus infrastructure provider.
+#
+# Apply with:
+#   omnictl cluster template sync -f cluster-template.yaml
+
+kind: Cluster
+name: talos-morpheus
+kubernetes:
+  version: v1.34.1
+talos:
+  version: v1.11.2
+---
+kind: ControlPlane
+machineClass:
+  name: morpheus-controlplane
+  size: 3
+---
+kind: Workers
+machineClass:
+  name: morpheus-workers
+  size: 3

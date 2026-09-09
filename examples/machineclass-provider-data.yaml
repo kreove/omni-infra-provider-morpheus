@@ -1,0 +1,43 @@
+# Machine Class provider data for the Morpheus infrastructure provider.
+#
+# Every Morpheus object can be given as a name or a numeric id. The id wins
+# when both are set, so a class can be written readably and pinned later.
+#
+# Find the ids with, for example:
+#   curl -sk -H "Authorization: Bearer $MORPHEUS_TOKEN" \
+#     "$MORPHEUS_ENDPOINT/api/zones?max=100" | jq '.zones[] | {id, name}'
+
+cloud:
+  name: MVM
+group:
+  name: Talos
+layout:
+  name: MVM VM
+plan:
+  name: Custom
+network:
+  name: vlan100
+
+# Optional: pin the MVM compute pool. Morpheus chooses one when unset.
+#resource_pool:
+#  name: Cluster-01
+
+# Optional: pin a datastore, or use "auto" / "autoCluster".
+#datastore: auto
+
+# Optional sizing overrides. Morpheus sizes an instance from its service plan;
+# these only take effect on a plan that permits custom sizing.
+cores: 4
+memory: 8192
+disk_size: 32
+
+architecture: amd64
+
+# qcow2 is native for MVM and is downloaded uncompressed. Use "raw" to fetch
+# nocloud raw.xz and have the provider decompress it before upload.
+image_format: qcow2
+
+# Optional: skip the Image Factory download entirely and provision from a
+# virtual image that already exists in Morpheus.
+#image:
+#  name: talos-custom

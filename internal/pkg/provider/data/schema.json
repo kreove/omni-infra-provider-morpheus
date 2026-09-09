@@ -1,0 +1,168 @@
+{
+  "type": "object",
+  "properties": {
+    "cloud": {
+      "type": "object",
+      "description": "Morpheus cloud (zone) VMs are created in. Set id or name.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "description": "Morpheus group (site) that owns the instance. Set id or name.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "instance_type": {
+      "type": "object",
+      "description": "Library instance type. Set id or name, or use instance_type_code.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "instance_type_code": {
+      "type": "string",
+      "description": "Library instance type code, e.g. 'vm'. Used when instance_type is unset.",
+      "default": "vm"
+    },
+    "layout": {
+      "type": "object",
+      "description": "Library layout, which selects the provision type. Must be an MVM layout. Set id or name.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "description": "Service plan sizing the instance. Set id or name.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "description": "Network attached to the instance's primary NIC. Set id or name.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "resource_pool": {
+      "type": "object",
+      "description": "Optional MVM compute pool. Leave unset to let Morpheus choose.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "datastore": {
+      "type": "string",
+      "description": "Optional datastore ID, or 'auto'/'autoCluster' to let Morpheus choose.",
+      "default": ""
+    },
+    "image": {
+      "type": "object",
+      "description": "Optional existing Morpheus virtual image. Leave unset to download and cache the required Talos image automatically from Talos Image Factory.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "image_format": {
+      "enum": [
+        "qcow2",
+        "raw"
+      ],
+      "default": "qcow2",
+      "description": "Image Factory artifact to import. qcow2 is native for MVM; raw is downloaded as raw.xz and decompressed by the provider."
+    },
+    "os_type": {
+      "type": "string",
+      "description": "Morpheus OS type code recorded on imported images. Morpheus has no Talos entry, so a generic Linux is used.",
+      "default": "linux"
+    },
+    "uefi": {
+      "type": "boolean",
+      "description": "Firmware for imported images. Leave unset to use the platform default; the Talos nocloud image boots under either."
+    },
+    "architecture": {
+      "enum": [
+        "amd64"
+      ],
+      "default": "amd64"
+    },
+    "cores": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Optional core count override. Only applied on a service plan that permits custom sizing; 0 uses the plan."
+    },
+    "memory": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Optional RAM override in MiB. Only applied on a service plan that permits custom sizing; 0 uses the plan."
+    },
+    "disk_size": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Optional boot disk size override in GiB. 0 uses the plan."
+    }
+  },
+  "required": [
+    "cloud",
+    "group",
+    "layout",
+    "plan",
+    "network",
+    "architecture"
+  ]
+}

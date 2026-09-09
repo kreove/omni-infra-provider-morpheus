@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omni-infra-provider-morpheus
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: omni-infra-provider-morpheus
+  namespace: omni-infra-provider-morpheus
+type: Opaque
+stringData:
+  OMNI_ENDPOINT: https://your-account.omni.siderolabs.io
+  OMNI_SERVICE_ACCOUNT_KEY: ""
+  MORPHEUS_ENDPOINT: https://morpheus.example.com
+  MORPHEUS_TOKEN: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omni-infra-provider-morpheus
+  namespace: omni-infra-provider-morpheus
+spec:
+  # Two replicas would race to create the same instances and images. The
+  # Morpheus-side image cache is keyed by a deterministic name so a second
+  # replica would not corrupt it, but nothing serializes instance creation.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: omni-infra-provider-morpheus
+  template:
+    metadata:
+      labels:
+        app: omni-infra-provider-morpheus
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: provider
+          image: ghcr.io/kreove/omni-infra-provider-morpheus:latest
+          envFrom:
+            - secretRef:
+                name: omni-infra-provider-morpheus
+          volumeMounts:
+            # Talos images are staged here on the way into Morpheus.
+            - name: scratch
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 4Gi

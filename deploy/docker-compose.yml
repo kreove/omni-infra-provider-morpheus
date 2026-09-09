@@ -1,0 +1,12 @@
+services:
+  omni-infra-provider-morpheus:
+    image: ghcr.io/kreove/omni-infra-provider-morpheus:latest
+    container_name: omni-infra-provider-morpheus
+    restart: unless-stopped
+    env_file:
+      - .env
+    # The provider streams Talos images through its own filesystem on the way
+    # into Morpheus. A raw image needs a couple of gigabytes of scratch space;
+    # qcow2 needs far less.
+    tmpfs:
+      - /tmp:size=4g
