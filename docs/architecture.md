@@ -22,10 +22,11 @@ api/specs         protobuf state persisted per machine
 Omni drives the provider through the steps below. Each is idempotent and may be retried at any point; a step that needs to wait returns a retry interval rather than blocking.
 
 1. **validateRequest** — length-checks the request ID and validates the Machine Class.
-2. **createSchematic** — asks Omni for an Image Factory schematic covering the requested Talos version and system extensions, and records it. Kernel arguments are added here.
-3. **ensureTarget** — resolves every Machine Class reference to a Morpheus ID. Runs before anything is created, so a bad Machine Class fails cleanly rather than halfway through provisioning.
-4. **ensureImage** — resolves a pinned image, or ensures the cached one exists, importing it if not. Retries while an import runs.
-5. **syncMachine** — finds or creates the Morpheus instance, then polls until it is running.
+2. **ensureTarget** — resolves every Machine Class reference to a Morpheus ID. Runs before anything is created, so a bad Machine Class fails cleanly rather than halfway through provisioning.
+3. **ensureImage** — asks Omni for the installation medium, which also ensures the schematic exists; then resolves a pinned image, or ensures the cached one exists, importing it if not. Kernel arguments are applied here. Retries while an import runs.
+4. **syncMachine** — finds or creates the Morpheus instance, then polls until it is running.
+
+There is no separate schematic step. Resolving the medium ensures the schematic and reports its ID in the same call, so a separate step would ask Omni for the same medium twice per reconcile — and the download URL it returns is short-lived, so it belongs in the step that fetches it.
 
 Deprovisioning is separate: power off, then delete with volumes, retrying until the instance is gone.
 
@@ -45,13 +46,17 @@ Per machine, the provider persists in Omni:
 
 ## Image cache
 
-Caching is keyed on a name derived from the Image Factory URL, which already encodes schematic, Talos version, architecture and format:
+Caching is keyed on the `StorageKey` Omni reports for the installation medium:
 
 ```
-omni-talos-<first 12 bytes of sha256(url), hex>
+omni-talos-<StorageKey>
 ```
 
-Two properties matter. The name is **stable**, so a restarted provider finds the image it already imported rather than re-importing it. And it is **collision-free** across inputs, so a machine cannot be built from the wrong Talos image. Both are covered by tests.
+Two properties matter. The name is **stable**, so a restarted provider finds the image it already imported rather than re-importing it. And it is **distinct per medium**, so a machine cannot be built from the wrong Talos image. Both are covered by tests.
+
+The download URL is deliberately *not* used to derive the name. It can carry credentials or a short-lived download token, so a name derived from it would change whenever those rotate and orphan the image already stored under the old name. `StorageKey` exists precisely for callers that store what they download, and changes only when the medium itself does.
+
+For the same reason the URL is never logged and never written into the Morpheus image description.
 
 The cache lives in Morpheus, not in the provider. The in-memory map only tracks *in-progress* imports, so that concurrent Machine Requests for the same image wait on one transfer instead of starting several.
 

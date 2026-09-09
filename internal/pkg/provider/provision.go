@@ -62,28 +62,6 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			return validateProviderData(providerData)
 		}),
-		provision.NewStep("createSchematic", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
-			// Keep a serial console for hosts that offer one, but leave tty0
-			// last so it owns /dev/console. Morpheus VM Essentials gives a KVM
-			// guest a VNC console by default and a serial port only when the
-			// layout asks for one; without tty0 every message after early boot
-			// goes to a device that may not exist, leaving the Morpheus
-			// console blank and a boot failure invisible.
-			schematic, err := pctx.GenerateSchematicID(
-				ctx,
-				logger,
-				provision.WithExtraKernelArgs("console=ttyS0,38400n8", "console=tty0"),
-				provision.WithoutConnectionParams(),
-			)
-			if err != nil {
-				return err
-			}
-
-			pctx.State.TypedSpec().Value.Schematic = schematic
-			pctx.State.TypedSpec().Value.TalosVersion = pctx.GetTalosVersion()
-
-			return nil
-		}),
 		provision.NewStep("ensureTarget", func(ctx context.Context, _ *zap.Logger, pctx provision.Context[*resources.Machine]) error {
 			providerData, err := unmarshalProviderData(pctx)
 			if err != nil {
@@ -98,6 +76,11 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			return err
 		}),
+		// Resolving the installation medium also ensures the schematic exists
+		// and reports its ID, so there is no separate schematic step. Keeping
+		// one would mean asking Omni for the same medium twice per reconcile,
+		// and the download URL it returns is short-lived -- it belongs in the
+		// step that actually fetches it, not in an earlier one.
 		provision.NewStep("ensureImage", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
 			providerData, err := unmarshalProviderData(pctx)
 			if err != nil {

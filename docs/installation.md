@@ -68,7 +68,7 @@ make build
 If the build fails with `undefined: http2.TrailerPrefix`, use the Go version the module targets:
 
 ```bash
-GOTOOLCHAIN=go1.26.2 make build
+GOTOOLCHAIN=go1.26.7 make build
 ```
 
 See [Troubleshooting](troubleshooting.md#build-problems) for why.

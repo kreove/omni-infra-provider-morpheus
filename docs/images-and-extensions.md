@@ -8,28 +8,25 @@ That split is deliberate: it means upgrading Talos or adding an extension is a c
 
 ## How an image is produced
 
-1. Omni resolves the cluster's Talos version and extensions into an **Image Factory schematic ID**.
-2. The provider builds an artifact URL from that schematic:
-
-   ```
-   <factory>/image/<schematic>/<talos version>/nocloud-amd64.qcow2
-   ```
-
-3. It downloads that artifact, decompressing it when the format is compressed.
+1. Omni resolves the cluster's Talos version and extensions into an **Image Factory schematic**.
+2. The provider asks Omni for the installation medium it wants — a NoCloud disk image, in the configured architecture and format. Omni ensures the schematic exists on its image factory and returns a URL, any headers needed to fetch it, the schematic ID, and a storage key.
+3. The provider downloads that medium, decompressing it when the format is compressed.
 4. It creates a Morpheus virtual image and streams the file into it.
 5. It waits for Morpheus to finish processing, then provisions from it.
 
-Steps 2–5 happen once per unique combination of schematic, version, architecture and format. Everything after that is a cache hit.
+Steps 2–5 happen once per unique medium. Everything after that is a cache hit.
+
+The provider asks for a medium by description rather than building a factory URL itself. That keeps it working against a factory that authenticates downloads, and against future changes to how the factory spells a filename — neither of which a hand-built URL survives.
 
 ## The cache name
 
 ```
-omni-talos-<first 12 bytes of sha256(image url), hex>
+omni-talos-<StorageKey>
 ```
 
-The URL already encodes every input that changes the image, so hashing it gives a name that is stable across restarts and cannot collide between different images. Both properties are covered by tests — a collision would boot a machine from the wrong Talos build, which is not a failure you would notice quickly.
+`StorageKey` is Omni's identifier for the medium. It is stable across restarts and distinct per medium, and — unlike the download URL — it survives a credential rotation. A name derived from the URL would change whenever a token in it did, orphaning the image already stored under the old name.
 
-The name is opaque, so each image's **description** records the URL it came from. That is what tells you which Talos version and schematic a cached image represents.
+The name is opaque, so each image's **description** records the Talos version, architecture, format and schematic ID. That is what tells you which build a cached image represents. The URL is not recorded, because it can carry credentials.
 
 ## Formats
 

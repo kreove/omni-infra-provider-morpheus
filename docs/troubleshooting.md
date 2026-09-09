@@ -136,7 +136,7 @@ Not a problem with this project. Go 1.27 changed how `golang.org/x/net/http2` is
 Build with the Go version the module targets, which is what CI and the Dockerfile use:
 
 ```bash
-GOTOOLCHAIN=go1.26.2 go build ./...
+GOTOOLCHAIN=go1.26.7 go build ./...
 ```
 
 `GOTOOLCHAIN=auto` will not do this for you — it only ever selects a *newer* toolchain than the one installed, never an older one.
