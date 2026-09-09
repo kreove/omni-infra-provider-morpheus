@@ -7,40 +7,32 @@ package provider
 import (
 	"strings"
 	"testing"
+
+	"github.com/siderolabs/omni/client/pkg/imagefactory"
+
+	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/data"
 )
 
-const (
-	testSchematic = "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"
-	testVersion   = "v1.11.0"
-)
+const testSchematic = "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"
 
-func TestBuildTalosImageReference(t *testing.T) {
+func TestMediaSpecFor(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		format      string
-		wantURL     string
+		wantFormat  string
 		wantErrPart string
 	}{
-		{
-			name:    "qcow2 is fetched uncompressed",
-			format:  imageFormatQcow2,
-			wantURL: "https://factory.talos.dev/image/" + testSchematic + "/" + testVersion + "/nocloud-amd64.qcow2",
-		},
-		{
-			name:    "raw is fetched as xz",
-			format:  imageFormatRaw,
-			wantURL: "https://factory.talos.dev/image/" + testSchematic + "/" + testVersion + "/nocloud-amd64.raw.xz",
-		},
-		{
-			name:        "unknown format is rejected",
-			format:      "vmdk",
-			wantErrPart: "unsupported image format",
-		},
+		// qcow2 is native for MVM and is served uncompressed.
+		{"qcow2", imageFormatQcow2, "qcow2", ""},
+		// The factory only publishes raw as xz; the provider decompresses it.
+		{"raw maps to raw.xz", imageFormatRaw, "raw.xz", ""},
+		{"unknown format is rejected", "vmdk", "", "unsupported image format"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			imageURL, cacheName, err := buildTalosImageReference(
-				"https://factory.talos.dev", testSchematic, testVersion, "amd64", test.format,
-			)
+			providerData := validData()
+			providerData.ImageFormat = test.format
+
+			spec, err := mediaSpecFor(providerData)
 
 			if test.wantErrPart != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErrPart) {
@@ -54,81 +46,121 @@ func TestBuildTalosImageReference(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if imageURL != test.wantURL {
-				t.Errorf("URL = %q, want %q", imageURL, test.wantURL)
+			if spec.Format != test.wantFormat {
+				t.Errorf("Format = %q, want %q", spec.Format, test.wantFormat)
 			}
 
-			if !strings.HasPrefix(cacheName, imageCachePrefix) {
-				t.Errorf("cache name %q does not start with %q", cacheName, imageCachePrefix)
+			if spec.Kind != imagefactory.InstallationMediaKindDisk {
+				t.Errorf("Kind = %q, want a disk image", spec.Kind)
+			}
+
+			// NoCloud is what makes Talos read its config from the drive
+			// Morpheus writes; any other platform would ignore it.
+			if spec.Platform != talosPlatform {
+				t.Errorf("Platform = %q, want %q", spec.Platform, talosPlatform)
+			}
+
+			if spec.Architecture != "amd64" {
+				t.Errorf("Architecture = %q, want amd64", spec.Architecture)
 			}
 		})
 	}
 }
 
-// The cache is keyed by name, so two images that differ in any input must not
-// collide -- a collision would boot a machine from the wrong Talos build.
-func TestBuildTalosImageReferenceCacheNamesAreDistinct(t *testing.T) {
-	seen := map[string]string{}
+// The medium is fetched by a goroutine that outlives the step which requested
+// the URL, so the default token lifetime -- which assumes an immediate fetch --
+// is not enough.
+func TestMediaSpecForRequestsALongDownloadToken(t *testing.T) {
+	spec, err := mediaSpecFor(validData())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	for _, input := range []struct {
-		schematic, version, arch, format string
-	}{
-		{testSchematic, testVersion, "amd64", imageFormatQcow2},
-		{testSchematic, testVersion, "amd64", imageFormatRaw},
-		{testSchematic, "v1.12.0", "amd64", imageFormatQcow2},
-		{strings.Repeat("a", 64), testVersion, "amd64", imageFormatQcow2},
-	} {
-		_, cacheName, err := buildTalosImageReference(
-			"https://factory.talos.dev", input.schematic, input.version, input.arch, input.format,
-		)
+	if spec.DownloadTokenTTL < imageUploadTimeout {
+		t.Errorf("DownloadTokenTTL = %s, want at least the upload timeout %s", spec.DownloadTokenTTL, imageUploadTimeout)
+	}
+}
+
+// The spec must validate against the image factory's own rules, or the medium
+// is rejected at resolve time rather than here.
+func TestMediaSpecForIsValid(t *testing.T) {
+	for _, format := range []string{imageFormatQcow2, imageFormatRaw} {
+		providerData := validData()
+		providerData.ImageFormat = format
+
+		spec, err := mediaSpecFor(providerData)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if previous, ok := seen[cacheName]; ok {
-			t.Fatalf("cache name %q collides between %v and %s", cacheName, input, previous)
+		if err = spec.Validate(); err != nil {
+			t.Errorf("format %q produced an invalid media spec: %v", format, err)
 		}
-
-		seen[cacheName] = input.version + "/" + input.format
 	}
 }
 
-// The same inputs must always produce the same name, or a restarted provider
+// The name must come from StorageKey, never the URL: the URL can carry
+// credentials or a download token, so a name derived from it would change when
+// those rotate and orphan the image already stored under the old name.
+func TestCacheNameForUsesStorageKey(t *testing.T) {
+	media := imagefactory.InstallationMedia{
+		StorageKey:  "abc123",
+		URL:         "https://factory.example.com/image/x/y/z?token=secret",
+		SchematicID: testSchematic,
+	}
+
+	got := cacheNameFor(media)
+
+	if got != imageCachePrefix+"abc123" {
+		t.Errorf("cacheNameFor() = %q, want %q", got, imageCachePrefix+"abc123")
+	}
+
+	if strings.Contains(got, "secret") || strings.Contains(got, "token") {
+		t.Errorf("cache name %q leaks the download URL", got)
+	}
+}
+
+// Two media that differ must not share a name, or a machine could be built
+// from the wrong Talos image.
+func TestCacheNameForIsDistinctPerMedium(t *testing.T) {
+	first := cacheNameFor(imagefactory.InstallationMedia{StorageKey: "aaa"})
+	second := cacheNameFor(imagefactory.InstallationMedia{StorageKey: "bbb"})
+
+	if first == second {
+		t.Errorf("distinct media share the cache name %q", first)
+	}
+}
+
+// The same medium must always produce the same name, or a restarted provider
 // re-imports an image it already has.
-func TestBuildTalosImageReferenceIsStable(t *testing.T) {
-	_, first, err := buildTalosImageReference("https://factory.talos.dev", testSchematic, testVersion, "amd64", imageFormatQcow2)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+func TestCacheNameForIsStable(t *testing.T) {
+	media := imagefactory.InstallationMedia{StorageKey: "stable-key"}
 
-	_, second, err := buildTalosImageReference("https://factory.talos.dev", testSchematic, testVersion, "amd64", imageFormatQcow2)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if first != second {
-		t.Errorf("cache name is not stable: %q then %q", first, second)
+	if cacheNameFor(media) != cacheNameFor(media) {
+		t.Error("cache name is not stable across calls")
 	}
 }
 
-func TestBuildTalosImageReferenceRejectsBadInput(t *testing.T) {
-	for _, test := range []struct {
-		name                                   string
-		base, schematic, version, arch, format string
-		wantErrPart                            string
-	}{
-		{"no schematic", "https://factory.talos.dev", "", testVersion, "amd64", imageFormatQcow2, "schematic"},
-		{"no version", "https://factory.talos.dev", testSchematic, "", "amd64", imageFormatQcow2, "Talos version"},
-		{"no architecture", "https://factory.talos.dev", testSchematic, testVersion, "", imageFormatQcow2, "architecture"},
-		{"bad scheme", "ftp://factory.talos.dev", testSchematic, testVersion, "amd64", imageFormatQcow2, "HTTP or HTTPS"},
-		{"no host", "https://", testSchematic, testVersion, "amd64", imageFormatQcow2, "no host"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, _, err := buildTalosImageReference(test.base, test.schematic, test.version, test.arch, test.format)
-			if err == nil || !strings.Contains(err.Error(), test.wantErrPart) {
-				t.Fatalf("expected error containing %q, got %v", test.wantErrPart, err)
-			}
-		})
+// The description is what tells an operator which Talos build a digest-named
+// image actually holds.
+func TestDescribeImage(t *testing.T) {
+	providerData := validData()
+
+	got := describeImage(imageSource{
+		schematicID:  testSchematic,
+		talosVersion: "v1.11.0",
+		url:          "https://factory.example.com/image?token=secret",
+	}, providerData)
+
+	for _, want := range []string{"v1.11.0", "amd64", imageFormatQcow2, testSchematic} {
+		if !strings.Contains(got, want) {
+			t.Errorf("description %q is missing %q", got, want)
+		}
+	}
+
+	// The URL can carry credentials and must not be persisted into Morpheus.
+	if strings.Contains(got, "secret") || strings.Contains(got, "http") {
+		t.Errorf("description %q leaks the download URL", got)
 	}
 }
 
@@ -182,5 +214,20 @@ func TestParseImageID(t *testing.T) {
 		if _, err = parseImageID(bad); err == nil {
 			t.Errorf("expected error for %q", bad)
 		}
+	}
+}
+
+// A pinned image bypasses the Image Factory entirely, so an unresolvable one
+// must fail loudly rather than silently falling back to an import.
+func TestMediaSpecForRejectsEmptyArchitecture(t *testing.T) {
+	providerData := data.Data{ImageFormat: imageFormatQcow2}
+
+	spec, err := mediaSpecFor(providerData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err = spec.Validate(); err == nil {
+		t.Error("expected an empty architecture to fail media spec validation")
 	}
 }

@@ -28,7 +28,7 @@ This is not a fault in this project. Go 1.27 changed how `golang.org/x/net/http2
 Build with the version the module targets:
 
 ```bash
-GOTOOLCHAIN=go1.26.2 make test
+GOTOOLCHAIN=go1.26.7 make test
 ```
 
 `GOTOOLCHAIN=auto` does not help: it only ever selects a *newer* toolchain than the installed one, never an older one. CI and the Dockerfile both pin the toolchain, so neither is affected.

@@ -6,19 +6,16 @@ package provider
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/siderolabs/omni/client/pkg/imagefactory"
 	"github.com/siderolabs/omni/client/pkg/infra/provision"
 	"github.com/ulikunitz/xz"
 	"go.uber.org/zap"
@@ -30,6 +27,11 @@ import (
 const (
 	imageCachePrefix = "omni-talos-"
 
+	// talosPlatform is the Talos platform this provider provisions. NoCloud is
+	// what makes the guest read its machine config from the config drive
+	// Morpheus writes.
+	talosPlatform = "nocloud"
+
 	// imageBuildTimeout bounds the whole download, decompress and upload
 	// cycle. A Talos raw image decompresses to well over a gigabyte and the
 	// upload crosses the operator's network twice, so this is generous.
@@ -37,6 +39,15 @@ const (
 
 	// imageUploadTimeout bounds just the upload leg.
 	imageUploadTimeout = 60 * time.Minute
+
+	// imageDownloadTokenTTL is how long the provider asks the image factory
+	// download URL to stay valid.
+	//
+	// It has to outlast the download, which runs detached from the step that
+	// requested the URL. Omni's default assumes the fetch happens immediately,
+	// which is not true here: the download starts promptly but a large image
+	// on a slow link can still be in flight much later.
+	imageDownloadTokenTTL = 60 * time.Minute
 
 	// imageReadyTimeout bounds the wait for Morpheus to finish processing an
 	// uploaded image.
@@ -58,6 +69,17 @@ type imageBuild struct {
 	err     error
 }
 
+// imageSource is everything a detached import needs.
+//
+// It is copied out of the provision context on purpose. The context belongs to
+// the step that created it, and the import outlives that step.
+type imageSource struct {
+	url          string
+	headers      http.Header
+	schematicID  string
+	talosVersion string
+}
+
 // ensureTalosImage resolves a manually pinned Morpheus virtual image, or
 // downloads, imports and caches the Talos image this machine needs. The
 // returned boolean is false while an import is still running.
@@ -76,18 +98,78 @@ func (p *Provisioner) ensureTalosImage(
 		return image.ID, true, nil
 	}
 
-	imageURL, cacheName, err := buildTalosImageReference(
-		p.imageFactoryBaseURL,
-		pctx.State.TypedSpec().Value.Schematic,
-		pctx.GetTalosVersion(),
-		providerData.Architecture,
-		providerData.ImageFormat,
-	)
+	spec, err := mediaSpecFor(providerData)
 	if err != nil {
 		return 0, false, err
 	}
 
-	return p.ensureCachedImage(ctx, logger, providerData, imageURL, cacheName)
+	// Omni owns the schematic upload and knows how its image factory spells a
+	// medium, so the provider asks for one by description rather than building
+	// a factory URL itself. This also keeps working against a factory that
+	// authenticates downloads, which a hand-built URL would not.
+	media, err := pctx.EnsureInstallationMedia(
+		ctx,
+		logger,
+		spec,
+		// Keep a serial console for hosts that offer one, but leave tty0 last
+		// so it owns /dev/console. Morpheus VM Essentials gives a KVM guest a
+		// VNC console by default and a serial port only when the layout asks
+		// for one; without tty0 every message after early boot goes to a
+		// device that may not exist, leaving the Morpheus console blank and a
+		// boot failure invisible.
+		provision.WithExtraKernelArgs("console=ttyS0,38400n8", "console=tty0"),
+		provision.WithoutConnectionParams(),
+	)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to resolve Talos installation media: %w", err)
+	}
+
+	pctx.State.TypedSpec().Value.Schematic = media.SchematicID
+	pctx.State.TypedSpec().Value.TalosVersion = pctx.GetTalosVersion()
+
+	source := imageSource{
+		url:          media.URL,
+		headers:      media.Headers,
+		schematicID:  media.SchematicID,
+		talosVersion: pctx.GetTalosVersion(),
+	}
+
+	return p.ensureCachedImage(ctx, logger, providerData, source, cacheNameFor(media))
+}
+
+// cacheNameFor derives the Morpheus virtual image name for a medium.
+//
+// StorageKey exists for exactly this: it identifies the medium and changes only
+// when the medium does. The URL must not be used instead -- it can carry
+// credentials or a download token, so a name derived from it would change
+// whenever those rotate and orphan the image already stored under the old name.
+func cacheNameFor(media imagefactory.InstallationMedia) string {
+	return imageCachePrefix + media.StorageKey
+}
+
+// mediaSpecFor describes the installation medium a Machine Class asks for.
+func mediaSpecFor(providerData data.Data) (provision.MediaSpec, error) {
+	var format string
+
+	switch providerData.ImageFormat {
+	case imageFormatQcow2:
+		format = "qcow2"
+	case imageFormatRaw:
+		// The factory publishes raw only as xz; the provider decompresses it.
+		format = "raw.xz"
+	default:
+		return provision.MediaSpec{}, fmt.Errorf("unsupported image format %q", providerData.ImageFormat)
+	}
+
+	return provision.MediaSpec{
+		MediaSpec: imagefactory.MediaSpec{
+			Kind:         imagefactory.InstallationMediaKindDisk,
+			Platform:     talosPlatform,
+			Architecture: providerData.Architecture,
+			Format:       format,
+		},
+		DownloadTokenTTL: imageDownloadTokenTTL,
+	}, nil
 }
 
 // resolveExistingImage looks up an operator-supplied virtual image.
@@ -124,7 +206,8 @@ func (p *Provisioner) ensureCachedImage(
 	ctx context.Context,
 	logger *zap.Logger,
 	providerData data.Data,
-	imageURL, cacheName string,
+	source imageSource,
+	cacheName string,
 ) (int, bool, error) {
 	buildAny, loaded := p.imageBuilds.LoadOrStore(cacheName, &imageBuild{})
 
@@ -155,13 +238,16 @@ func (p *Provisioner) ensureCachedImage(
 			build.imageID = images[0].ID
 			build.mu.Unlock()
 		default:
+			// The media URL is deliberately absent from this line: it can
+			// carry credentials or a download token.
 			logger.Info(
 				"starting Talos image import",
 				zap.String("name", cacheName),
-				zap.String("url", imageURL),
+				zap.String("schematic", source.schematicID),
+				zap.String("talos_version", source.talosVersion),
 			)
 
-			go p.runImageBuild(providerData, imageURL, cacheName, build)
+			go p.runImageBuild(providerData, source, cacheName, build)
 		}
 	}
 
@@ -185,14 +271,14 @@ func (p *Provisioner) ensureCachedImage(
 }
 
 // runImageBuild performs the import and records the outcome on build.
-func (p *Provisioner) runImageBuild(providerData data.Data, imageURL, cacheName string, build *imageBuild) {
+func (p *Provisioner) runImageBuild(providerData data.Data, source imageSource, cacheName string, build *imageBuild) {
 	// Detached from the request context on purpose: the provisioning step that
 	// started this returns immediately, and cancelling its context must not
 	// abort an import other machines are already waiting on.
 	ctx, cancel := context.WithTimeout(context.Background(), imageBuildTimeout)
 	defer cancel()
 
-	imageID, err := p.importImage(ctx, providerData, imageURL, cacheName)
+	imageID, err := p.importImage(ctx, providerData, source, cacheName)
 
 	build.mu.Lock()
 	defer build.mu.Unlock()
@@ -210,11 +296,12 @@ func (p *Provisioner) runImageBuild(providerData data.Data, imageURL, cacheName 
 func (p *Provisioner) importImage(
 	ctx context.Context,
 	providerData data.Data,
-	imageURL, cacheName string,
+	source imageSource,
+	cacheName string,
 ) (int, error) {
-	localPath, err := downloadImage(ctx, imageURL, providerData.ImageFormat)
+	localPath, err := downloadImage(ctx, source, providerData.ImageFormat)
 	if err != nil {
-		return 0, fmt.Errorf("failed to download Talos image from %q: %w", imageURL, err)
+		return 0, fmt.Errorf("failed to download Talos image: %w", err)
 	}
 
 	defer os.Remove(localPath)
@@ -233,9 +320,11 @@ func (p *Provisioner) importImage(
 		"virtioSupported": true,
 		"visibility":      "private",
 		"osType":          map[string]any{"code": providerData.OSType},
-		"description": fmt.Sprintf(
-			"Talos image managed by Sidero Omni. Imported from %s", imageURL,
-		),
+		// The cache name is a digest and says nothing to a human. Record what
+		// the image actually is, so an operator deciding whether a cached
+		// image is still needed can tell. The source URL is deliberately not
+		// recorded: it can carry credentials.
+		"description": describeImage(source, providerData),
 	}
 
 	if providerData.UEFI != nil {
@@ -276,6 +365,17 @@ func (p *Provisioner) importImage(
 	}
 
 	return image.ID, nil
+}
+
+// describeImage renders the human-readable description stored on a cached image.
+func describeImage(source imageSource, providerData data.Data) string {
+	return fmt.Sprintf(
+		"Talos %s %s (%s), schematic %s, managed by Sidero Omni",
+		source.talosVersion,
+		providerData.Architecture,
+		providerData.ImageFormat,
+		source.schematicID,
+	)
 }
 
 // waitForImageReady blocks until Morpheus has finished processing the upload.
@@ -339,12 +439,22 @@ func isImageFailed(image *VirtualImage) bool {
 	return strings.EqualFold(strings.TrimSpace(image.Status), "failed")
 }
 
-// downloadImage streams the Image Factory artifact to a scratch file,
+// downloadImage streams the installation medium to a scratch file,
 // decompressing it when the requested format arrives compressed.
-func downloadImage(ctx context.Context, imageURL, format string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+func downloadImage(ctx context.Context, source imageSource, format string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.url, nil)
 	if err != nil {
 		return "", err
+	}
+
+	// A factory that authenticates downloads returns them here. They are sent
+	// whenever present rather than decided from configuration, because the
+	// same factory may authenticate by header or inside the URL depending on
+	// how Omni is set up.
+	for key, values := range source.headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -354,10 +464,11 @@ func downloadImage(ctx context.Context, imageURL, format string) (string, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected HTTP status %d", resp.StatusCode)
+		// The URL is not included: it can carry a download token.
+		return "", fmt.Errorf("unexpected HTTP status %d from the image factory", resp.StatusCode)
 	}
 
-	var source io.Reader = resp.Body
+	var reader io.Reader = resp.Body
 
 	// The factory publishes qcow2 uncompressed but only ships raw as raw.xz,
 	// so only the raw path needs decompressing.
@@ -367,7 +478,7 @@ func downloadImage(ctx context.Context, imageURL, format string) (string, error)
 			return "", fmt.Errorf("failed to initialize xz decompression: %w", xerr)
 		}
 
-		source = xzReader
+		reader = xzReader
 	}
 
 	out, err := os.CreateTemp("", "omni-talos-*."+format)
@@ -376,74 +487,13 @@ func downloadImage(ctx context.Context, imageURL, format string) (string, error)
 	}
 	defer out.Close()
 
-	if _, err = io.Copy(out, source); err != nil {
+	if _, err = io.Copy(out, reader); err != nil {
 		os.Remove(out.Name())
 
 		return "", fmt.Errorf("failed to write image: %w", err)
 	}
 
 	return out.Name(), nil
-}
-
-// buildTalosImageReference derives the Image Factory URL and the deterministic
-// cache name for one schematic, version, architecture and format.
-func buildTalosImageReference(
-	baseURL,
-	schematic,
-	talosVersion,
-	architecture,
-	format string,
-) (imageURL, cacheName string, err error) {
-	if strings.TrimSpace(schematic) == "" {
-		return "", "", fmt.Errorf("cannot build Talos image URL without a schematic ID")
-	}
-
-	if strings.TrimSpace(talosVersion) == "" {
-		return "", "", fmt.Errorf("cannot build Talos image URL without a Talos version")
-	}
-
-	if strings.TrimSpace(architecture) == "" {
-		return "", "", fmt.Errorf("cannot build Talos image URL without an architecture")
-	}
-
-	var artifact string
-
-	switch format {
-	case imageFormatQcow2:
-		artifact = fmt.Sprintf("nocloud-%s.qcow2", architecture)
-	case imageFormatRaw:
-		artifact = fmt.Sprintf("nocloud-%s.raw.xz", architecture)
-	default:
-		return "", "", fmt.Errorf("unsupported image format %q", format)
-	}
-
-	base, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return "", "", fmt.Errorf("invalid Image Factory URL %q: %w", baseURL, err)
-	}
-
-	if base.Scheme != "https" && base.Scheme != "http" {
-		return "", "", fmt.Errorf("Image Factory URL must use HTTP or HTTPS")
-	}
-
-	if base.Host == "" {
-		return "", "", fmt.Errorf("Image Factory URL %q has no host", baseURL)
-	}
-
-	base.Path = path.Join(base.Path, "image", schematic, talosVersion, artifact)
-	base.RawPath = ""
-	base.RawQuery = ""
-	base.Fragment = ""
-
-	imageURL = base.String()
-
-	// The name has to be stable for the cache to work and unique per image, so
-	// it is derived from the URL, which already encodes schematic, version,
-	// architecture and format.
-	hash := sha256.Sum256([]byte(imageURL))
-	cacheName = imageCachePrefix + hex.EncodeToString(hash[:12])
-
-	return imageURL, cacheName, nil
 }
 
 // parseImageID converts a stored image ID back to an int.
