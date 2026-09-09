@@ -1,6 +1,6 @@
 # The builder always runs on the native build platform and cross-compiles for
 # the target, so multi-platform builds don't pay for QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
