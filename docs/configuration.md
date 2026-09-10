@@ -13,11 +13,13 @@ The provider is configured with environment variables or the equivalent flags. F
 | `MORPHEUS_USERNAME` | `--morpheus-username` | one of | | Morpheus username |
 | `MORPHEUS_PASSWORD` | `--morpheus-password` | one of | | Morpheus password |
 | | `--morpheus-insecure-skip-verify` | no | `false` | Skip Morpheus TLS verification |
-| `TALOS_IMAGE_FACTORY_BASE_URL` | `--image-factory-base-url` | no | `https://factory.talos.dev` | Talos Image Factory base URL |
 | | `--id` | no | `morpheus` | Provider ID registered in Omni |
 | | `--provider-name` | no | `Morpheus` | Display name in Omni |
 | | `--provider-description` | no | | Description shown in Omni |
 | | `--insecure-skip-verify` | no | `false` | Skip Omni TLS verification |
+
+> [!NOTE]
+> The provider has no Image Factory setting. Omni resolves the installation medium and hands the provider a URL, so the factory — including a self-hosted or authenticated one — is configured in Omni, not here.
 
 Set either `MORPHEUS_TOKEN` or both `MORPHEUS_USERNAME` and `MORPHEUS_PASSWORD`. When both are set, the token is used.
 

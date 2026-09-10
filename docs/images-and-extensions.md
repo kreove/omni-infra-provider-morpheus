@@ -53,7 +53,9 @@ console=ttyS0,38400n8 console=tty0
 
 Two options.
 
-**Point at your own Image Factory.** Set `TALOS_IMAGE_FACTORY_BASE_URL` to a self-hosted instance. Everything else is unchanged.
+**Point Omni at your own Image Factory.** The provider has no Image Factory setting of its own: it asks Omni for the medium it wants, and Omni returns a URL plus any headers needed to fetch it. A self-hosted or authenticated factory is configured in Omni, and the provider follows automatically — including sending whatever authentication headers Omni returns.
+
+The provider container must still reach the factory over HTTPS and trust its certificate, since it performs the download itself.
 
 **Pin an image already in Morpheus.** Set `image` in the Machine Class and the provider imports nothing:
 

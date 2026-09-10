@@ -34,17 +34,13 @@ const (
 
 // Provisioner provisions Talos VMs on Morpheus.
 type Provisioner struct {
-	client              *Client
-	imageFactoryBaseURL string
-	imageBuilds         sync.Map
+	client      *Client
+	imageBuilds sync.Map
 }
 
 // NewProvisioner creates a Morpheus provisioner.
-func NewProvisioner(client *Client, imageFactoryBaseURL string) *Provisioner {
-	return &Provisioner{
-		client:              client,
-		imageFactoryBaseURL: imageFactoryBaseURL,
-	}
+func NewProvisioner(client *Client) *Provisioner {
+	return &Provisioner{client: client}
 }
 
 // ProvisionSteps implements infra.Provisioner.
