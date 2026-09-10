@@ -5,6 +5,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -229,5 +230,95 @@ func TestMediaSpecForRejectsEmptyArchitecture(t *testing.T) {
 
 	if err = spec.Validate(); err == nil {
 		t.Error("expected an empty architecture to fail media spec validation")
+	}
+}
+
+func testImageSource() imageSource {
+	return imageSource{
+		schematicID:  testSchematic,
+		talosVersion: "v1.13.10",
+		url:          "https://factory.talos.dev/image?token=secret",
+	}
+}
+
+// Morpheus binds a nested osType object as a *new* OS type and validates it as
+// one. Sending {"code": "linux"} therefore failed with "code must be unique;
+// name is required; platform is required" -- the code already belonging to the
+// entry that was meant to be selected. Only an id references an existing one.
+func TestVirtualImagePayloadReferencesOSTypeByID(t *testing.T) {
+	providerData := validData()
+	providerData.OSType = "linux"
+
+	payload := buildVirtualImagePayload("omni-talos-abc", testImageSource(), providerData, 14)
+
+	osType, ok := payload["osType"].(map[string]any)
+	if !ok {
+		t.Fatalf("osType = %v, want a reference object", payload["osType"])
+	}
+
+	if osType["id"] != 14 {
+		t.Errorf("osType.id = %v, want 14", osType["id"])
+	}
+
+	if _, hasCode := osType["code"]; hasCode {
+		t.Error("osType must not carry a code; Morpheus reads that as a new record to create")
+	}
+
+	if _, hasName := osType["name"]; hasName {
+		t.Error("osType must not carry a name; Morpheus reads that as a new record to create")
+	}
+}
+
+// Morpheus does not require an OS type on a virtual image, so an unset one is
+// omitted rather than guessed at.
+func TestVirtualImagePayloadOmitsUnsetOSType(t *testing.T) {
+	payload := buildVirtualImagePayload("omni-talos-abc", testImageSource(), validData(), 0)
+
+	if _, ok := payload["osType"]; ok {
+		t.Errorf("osType should be absent when none is configured, got %v", payload["osType"])
+	}
+}
+
+// Talos reads its config from the NoCloud datasource and cannot run the
+// Morpheus agent, so both must be stated on the image itself.
+func TestVirtualImagePayloadDeclaresCloudInitAndNoAgent(t *testing.T) {
+	payload := buildVirtualImagePayload("omni-talos-abc", testImageSource(), validData(), 0)
+
+	if payload["isCloudInit"] != true {
+		t.Errorf("isCloudInit = %v, want true", payload["isCloudInit"])
+	}
+
+	if payload["installAgent"] != false {
+		t.Errorf("installAgent = %v, want false", payload["installAgent"])
+	}
+}
+
+// Firmware is three-state: set true, set false, or left to the platform.
+func TestVirtualImagePayloadOmitsUnsetUEFI(t *testing.T) {
+	if _, ok := buildVirtualImagePayload("x", testImageSource(), validData(), 0)["uefi"]; ok {
+		t.Error("uefi should be absent when unset")
+	}
+
+	providerData := validData()
+	uefi := true
+	providerData.UEFI = &uefi
+
+	if got := buildVirtualImagePayload("x", testImageSource(), providerData, 0)["uefi"]; got != true {
+		t.Errorf("uefi = %v, want true", got)
+	}
+}
+
+// The payload is sent as JSON, so it must survive encoding.
+func TestVirtualImagePayloadIsJSONSerializable(t *testing.T) {
+	providerData := validData()
+	providerData.OSType = "linux"
+
+	encoded, err := json.Marshal(buildVirtualImagePayload("omni-talos-abc", testImageSource(), providerData, 14))
+	if err != nil {
+		t.Fatalf("failed to encode payload: %v", err)
+	}
+
+	if strings.Contains(string(encoded), "secret") {
+		t.Error("payload leaks the download URL")
 	}
 }

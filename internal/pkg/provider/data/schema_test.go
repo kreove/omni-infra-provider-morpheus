@@ -161,6 +161,7 @@ func TestOptionalFieldsSayTheyAreOptional(t *testing.T) {
 		"instance_type.id", "instance_type.name", "instance_type_code",
 		"resource_pool.id", "resource_pool.name",
 		"image.id", "image.name",
+		"os_type",
 	} {
 		parts := strings.SplitN(path, ".", 2)
 

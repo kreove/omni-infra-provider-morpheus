@@ -88,8 +88,10 @@ func TestApplyDefaults(t *testing.T) {
 		t.Errorf("image_format = %q, want %q", value.ImageFormat, imageFormatQcow2)
 	}
 
-	if value.OSType != defaultOSTypeCode {
-		t.Errorf("os_type = %q, want %q", value.OSType, defaultOSTypeCode)
+	// os_type is deliberately not defaulted. Sending one requires resolving it
+	// to an id first, and Morpheus does not require the field at all.
+	if value.OSType != "" {
+		t.Errorf("os_type = %q, want it left unset", value.OSType)
 	}
 
 	// instance_type_code is deliberately not defaulted. The layout supplies the
