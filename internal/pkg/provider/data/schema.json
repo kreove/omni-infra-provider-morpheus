@@ -8,10 +8,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Morpheus cloud (zone) ID. Leave 0 to select by name instead."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Morpheus cloud (zone) name, e.g. hvm.example.com. Ignored when id is set."
         }
       }
     },
@@ -22,10 +24,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Morpheus group (site) ID. Leave 0 to select by name instead."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Morpheus group (site) name, e.g. Homelab. Ignored when id is set."
         }
       }
     },
@@ -36,16 +40,18 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Optional. Leave 0 -- the layout supplies the instance type. Only set to disambiguate a layout name that exists under more than one instance type."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional. Leave empty -- the layout supplies the instance type. Only set to disambiguate a layout name that exists under more than one instance type."
         }
       }
     },
     "instance_type_code": {
       "type": "string",
-      "description": "Optional. Same narrowing as instance_type, by the instance type's stable code."
+      "description": "Optional. Leave empty -- the layout supplies the instance type. Same narrowing as instance_type, by the type's stable code."
     },
     "layout": {
       "type": "object",
@@ -54,10 +60,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Layout ID. Leave 0 to select by name instead."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Layout name, e.g. Single HVM. Must be an MVM layout: it selects the hypervisor and supplies the instance type. Ignored when id is set."
         }
       }
     },
@@ -68,10 +76,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Service plan ID. Leave 0 to select by name instead."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Service plan name, e.g. 4 CPU, 4GB Memory. Sizes the instance. Ignored when id is set."
         }
       }
     },
@@ -82,10 +92,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Network ID. Leave 0 to select by name instead."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Network name for the primary NIC, e.g. Compute VLAN 110. Ignored when id is set."
         }
       }
     },
@@ -96,10 +108,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Optional. MVM compute pool ID. Leave 0 to select by name, or leave both unset to let Morpheus choose."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional. MVM compute pool name. Leave unset to let Morpheus choose."
         }
       }
     },
@@ -115,10 +129,12 @@
         "id": {
           "type": "integer",
           "minimum": 0,
-          "default": 0
+          "default": 0,
+          "description": "Optional. Existing Morpheus virtual image ID. Leave 0 to download and cache the Talos image automatically."
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "description": "Optional. Existing Morpheus virtual image name. Leave unset to download and cache the Talos image automatically."
         }
       }
     },
@@ -143,7 +159,8 @@
       "enum": [
         "amd64"
       ],
-      "default": "amd64"
+      "default": "amd64",
+      "description": "Machine architecture. Only amd64 is supported."
     },
     "cores": {
       "type": "integer",
