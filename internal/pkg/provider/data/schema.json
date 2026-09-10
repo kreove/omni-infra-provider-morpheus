@@ -148,8 +148,8 @@
     },
     "os_type": {
       "type": "string",
-      "description": "Morpheus OS type code recorded on imported images. Morpheus has no Talos entry, so a generic Linux is used.",
-      "default": "linux"
+      "description": "Optional. Library OS type name or code recorded on imported images, e.g. linux. Leave empty to omit it; Morpheus does not require one and this provider disables the agent behaviour it would drive.",
+      "default": ""
     },
     "uefi": {
       "type": "boolean",

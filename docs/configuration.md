@@ -55,7 +55,7 @@ plan:
 | `datastore` | string | no | | Datastore ID, or `auto` / `autoCluster` |
 | `image` | ref | no | | Existing virtual image, bypassing the Image Factory download |
 | `image_format` | enum | no | `qcow2` | `qcow2` or `raw` |
-| `os_type` | string | no | `linux` | OS type code recorded on imported images |
+| `os_type` | string | no | | Library OS type name or code for imported images; omitted when unset |
 | `uefi` | bool | no | | Firmware for imported images; platform default when unset |
 | `architecture` | enum | yes | `amd64` | Only `amd64` is supported |
 | `cores` | int | no | `0` | Core count override; `0` uses the plan |

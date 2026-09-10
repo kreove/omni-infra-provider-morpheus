@@ -338,6 +338,14 @@ func (c *Client) ListClouds(ctx context.Context) ([]NamedObject, error) {
 	return c.listNamed(ctx, "/api/zones", "zones", nil)
 }
 
+// ListOSTypes returns the library operating system types.
+//
+// The path is not under /api/os-types as the field name might suggest; it is
+// nested under the library's operating-systems section.
+func (c *Client) ListOSTypes(ctx context.Context) ([]NamedObject, error) {
+	return c.listNamed(ctx, "/api/library/operating-systems/os-types", "osTypes", nil)
+}
+
 // ListInstanceTypes returns library instance types.
 func (c *Client) ListInstanceTypes(ctx context.Context) ([]NamedObject, error) {
 	return c.listNamed(ctx, "/api/library/instance-types", "instanceTypes", nil)

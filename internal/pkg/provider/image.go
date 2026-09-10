@@ -306,30 +306,20 @@ func (p *Provisioner) importImage(
 
 	defer os.Remove(localPath)
 
-	payload := map[string]any{
-		"name":      cacheName,
-		"imageType": providerData.ImageFormat,
-		// Talos reads its machine config from the NoCloud datasource, so
-		// Morpheus must deliver user-data through a config drive rather than
-		// trying to reach the guest over SSH, which Talos does not serve.
-		"isCloudInit": true,
-		// The Morpheus agent is a package installed into the guest. Talos has
-		// no package manager and no shell, so an agent install can only fail
-		// and hold provisioning open until it times out.
-		"installAgent":    false,
-		"virtioSupported": true,
-		"visibility":      "private",
-		"osType":          map[string]any{"code": providerData.OSType},
-		// The cache name is a digest and says nothing to a human. Record what
-		// the image actually is, so an operator deciding whether a cached
-		// image is still needed can tell. The source URL is deliberately not
-		// recorded: it can carry credentials.
-		"description": describeImage(source, providerData),
+	osTypeID := 0
+
+	// Sent only when configured, and only ever as a reference to an existing
+	// record. See buildVirtualImagePayload.
+	if providerData.OSType != "" {
+		osType, oerr := p.resolveOSType(ctx, providerData.OSType)
+		if oerr != nil {
+			return 0, oerr
+		}
+
+		osTypeID = osType.ID
 	}
 
-	if providerData.UEFI != nil {
-		payload["uefi"] = *providerData.UEFI
-	}
+	payload := buildVirtualImagePayload(cacheName, source, providerData, osTypeID)
 
 	image, err := p.client.CreateVirtualImage(ctx, payload)
 	if err != nil {
@@ -365,6 +355,60 @@ func (p *Provisioner) importImage(
 	}
 
 	return image.ID, nil
+}
+
+// buildVirtualImagePayload renders the virtual image record for a cached image.
+func buildVirtualImagePayload(
+	cacheName string,
+	source imageSource,
+	providerData data.Data,
+	osTypeID int,
+) map[string]any {
+	payload := map[string]any{
+		"name":      cacheName,
+		"imageType": providerData.ImageFormat,
+		// Talos reads its machine config from the NoCloud datasource, so
+		// Morpheus must deliver user-data through a config drive rather than
+		// trying to reach the guest over SSH, which Talos does not serve.
+		"isCloudInit": true,
+		// The Morpheus agent is a package installed into the guest. Talos has
+		// no package manager and no shell, so an agent install can only fail
+		// and hold provisioning open until it times out.
+		"installAgent":    false,
+		"virtioSupported": true,
+		"visibility":      "private",
+		// The cache name is a digest and says nothing to a human. Record what
+		// the image actually is, so an operator deciding whether a cached
+		// image is still needed can tell. The source URL is deliberately not
+		// recorded: it can carry credentials.
+		"description": describeImage(source, providerData),
+	}
+
+	// Only ever a reference to an existing record. A nested {"code": ...}
+	// makes Morpheus bind the object as a *new* OS type and validate it as
+	// one, which fails with "code must be unique; name is required; platform
+	// is required" -- the code being already taken by the very entry that was
+	// meant to be selected. Morpheus treats the field as optional on a virtual
+	// image, so omitting it is a valid choice rather than a workaround.
+	if osTypeID > 0 {
+		payload["osType"] = map[string]any{"id": osTypeID}
+	}
+
+	if providerData.UEFI != nil {
+		payload["uefi"] = *providerData.UEFI
+	}
+
+	return payload
+}
+
+// resolveOSType looks up a library OS type by name or code.
+func (p *Provisioner) resolveOSType(ctx context.Context, nameOrCode string) (NamedObject, error) {
+	osTypes, err := p.client.ListOSTypes(ctx)
+	if err != nil {
+		return NamedObject{}, fmt.Errorf("failed to list Morpheus OS types: %w", err)
+	}
+
+	return matchRef(data.Ref{Name: nameOrCode}, osTypes, "os_type")
 }
 
 // describeImage renders the human-readable description stored on a cached image.

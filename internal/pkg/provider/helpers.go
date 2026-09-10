@@ -19,11 +19,6 @@ import (
 // provider targets.
 const mvmProviderType = "mvm"
 
-// defaultOSTypeCode is the generic Linux OS type. Morpheus ships no Talos
-// entry, and the field only drives cosmetic and agent-related behaviour that
-// this provider disables anyway.
-const defaultOSTypeCode = "linux"
-
 // imageFormat values accepted in a Machine Class.
 const (
 	imageFormatQcow2 = "qcow2"
@@ -144,9 +139,5 @@ func applyDefaults(value *data.Data) {
 
 	if value.ImageFormat == "" {
 		value.ImageFormat = imageFormatQcow2
-	}
-
-	if value.OSType == "" {
-		value.OSType = defaultOSTypeCode
 	}
 }

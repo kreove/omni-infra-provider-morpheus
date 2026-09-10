@@ -46,11 +46,17 @@ What remains uncertain is only which layouts your appliance actually offers, and
 
 Memory is stated in MiB in the Machine Class and converted to bytes, which is what Morpheus expects in this field.
 
-### 4. Image readiness
+### 4. OS type on imported images
+
+`os_type` is unset by default and the field is then omitted, because Morpheus does not require it on a virtual image and the agent behaviour it drives is disabled here anyway.
+
+Set it and the provider resolves the name or code against `/api/library/operating-systems/os-types` and sends the resulting **id**. It must be a reference: a nested `{"code": ...}` makes Morpheus bind the object as a *new* OS type and validate it as one, failing with `code must be unique; name is required; platform is required` — the code being already taken by the entry that was meant to be selected.
+
+### 5. Image readiness
 
 After upload, Morpheus processes an image asynchronously. The provider polls the virtual image until it reports an active status. Morpheus spells that status differently across versions and cloud types, and some versions leave it empty on a completed upload — so a non-empty size is accepted as evidence on its own. If imports hang at "waiting", check what your appliance actually reports in `status`.
 
-### 5. Boot firmware
+### 6. Boot firmware
 
 The Talos nocloud image boots under both BIOS and UEFI, so `uefi` is left unset by default and the platform default applies. If VMs power on and immediately halt without console output, set `uefi: true` (or `false`) explicitly.
 
