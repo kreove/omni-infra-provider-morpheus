@@ -95,7 +95,10 @@ func (p *Provisioner) resolveTarget(ctx context.Context, providerData data.Data)
 		)
 	}
 
-	plans, err := p.client.ListServicePlans(ctx, resolved.layout.ID, resolved.cloud.ID)
+	// Plans are narrowed to the layout's provision type. Unfiltered, an
+	// appliance that also manages public clouds returns hundreds of plans
+	// belonging to other technologies, none of which this layout can use.
+	plans, err := p.client.ListServicePlans(ctx, resolved.layout.ProvisionType.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Morpheus service plans: %w", err)
 	}
@@ -158,12 +161,24 @@ func matchRef(ref data.Ref, objects []NamedObject, field string) (NamedObject, e
 		}
 	}
 
+	// Fall back to the code. Morpheus presents it as "used as a unique
+	// identifier in the API and CLI" and this provider prints it in every
+	// candidate listing, so an operator reaching for an unambiguous handle
+	// reasonably reaches for that one.
+	if len(matches) == 0 {
+		for _, object := range objects {
+			if object.Code != "" && strings.EqualFold(object.Code, name) {
+				matches = append(matches, object)
+			}
+		}
+	}
+
 	switch len(matches) {
 	case 1:
 		return matches[0], nil
 	case 0:
 		return NamedObject{}, fmt.Errorf(
-			"%s %q does not exist in Morpheus; available: %s",
+			"%s %q does not exist in Morpheus, by name or code; available: %s",
 			field, name, describeOptions(objects),
 		)
 	default:

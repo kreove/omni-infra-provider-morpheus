@@ -13,7 +13,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Morpheus cloud (zone) name, e.g. hvm.example.com. Ignored when id is set."
+          "description": "Morpheus cloud (zone) name, e.g. hvm.example.com. Accepts the object's code as well. Ignored when id is set."
         }
       }
     },
@@ -29,7 +29,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Morpheus group (site) name, e.g. Homelab. Ignored when id is set."
+          "description": "Morpheus group (site) name, e.g. Homelab. Accepts the object's code as well. Ignored when id is set."
         }
       }
     },
@@ -65,7 +65,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Layout name, e.g. Single HVM. Must be an MVM layout: it selects the hypervisor and supplies the instance type. Ignored when id is set."
+          "description": "Layout name, e.g. Single HVM. Must be an MVM layout: it selects the hypervisor and supplies the instance type. Accepts the object's code as well. Ignored when id is set."
         }
       }
     },
@@ -81,7 +81,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Service plan name, e.g. 4 CPU, 4GB Memory. Sizes the instance. Ignored when id is set."
+          "description": "Service plan name or code, e.g. \"4 CPU, 4GB Memory\" or kvm-vm-4-4096. Sizes the instance. Ignored when id is set."
         }
       }
     },
@@ -97,7 +97,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Network name for the primary NIC, e.g. Compute VLAN 110. Ignored when id is set."
+          "description": "Network name for the primary NIC, e.g. Compute VLAN 110. Accepts the object's code as well. Ignored when id is set."
         }
       }
     },

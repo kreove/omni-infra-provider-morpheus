@@ -320,8 +320,80 @@ func TestListingsRequestALargePage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := query.Get("max"); got != listPageSize {
-		t.Errorf("max = %q, want %q", got, listPageSize)
+	if got := query.Get("max"); got != itoa(listPageSize) {
+		t.Errorf("max = %q, want %q", got, itoa(listPageSize))
+	}
+}
+
+// A capped single request cannot tell "this is everything" from "this is the
+// first N". Keeping only the first N reported a plan that existed as missing,
+// listing hundreds of unrelated ones beside it.
+func TestListingsPageUntilExhausted(t *testing.T) {
+	var offsets []string
+
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset := r.URL.Query().Get("offset")
+		offsets = append(offsets, offset)
+
+		// Two full pages, then a short one that ends the walk.
+		size := listPageSize
+		if offset == itoa(2*listPageSize) {
+			size = 3
+		}
+
+		rows := make([]map[string]any, 0, size)
+		for i := range size {
+			rows = append(rows, map[string]any{"id": i, "name": "plan-" + itoa(i)})
+		}
+
+		json.NewEncoder(w).Encode(map[string]any{"servicePlans": rows})
+	}))
+
+	plans, err := client.ListServicePlans(t.Context(), 7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if want := 2*listPageSize + 3; len(plans) != want {
+		t.Errorf("got %d plans, want %d", len(plans), want)
+	}
+
+	wantOffsets := []string{"0", itoa(listPageSize), itoa(2 * listPageSize)}
+	if len(offsets) != len(wantOffsets) {
+		t.Fatalf("requested offsets %v, want %v", offsets, wantOffsets)
+	}
+
+	for i, want := range wantOffsets {
+		if offsets[i] != want {
+			t.Errorf("offset %d = %q, want %q", i, offsets[i], want)
+		}
+	}
+}
+
+// Plans must be narrowed by provision type. /api/service-plans ignores
+// layoutId and zoneId rather than rejecting them, so sending those returns
+// every plan on the appliance -- Azure, AKS and all.
+func TestListServicePlansFiltersByProvisionType(t *testing.T) {
+	var query url.Values
+
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.Query()
+
+		json.NewEncoder(w).Encode(map[string]any{"servicePlans": []any{}})
+	}))
+
+	if _, err := client.ListServicePlans(t.Context(), 42); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := query.Get("provisionTypeId"); got != "42" {
+		t.Errorf("provisionTypeId = %q, want 42", got)
+	}
+
+	for _, ignored := range []string{"layoutId", "zoneId"} {
+		if query.Get(ignored) != "" {
+			t.Errorf("%s is sent but Morpheus ignores it, which returns every plan", ignored)
+		}
 	}
 }
 
@@ -335,7 +407,7 @@ func TestListNamedDecodesEachEndpointKey(t *testing.T) {
 		{"groups", "groups", func(c *Client) ([]NamedObject, error) { return c.ListGroups(t.Context()) }},
 		{"instance types", "instanceTypes", func(c *Client) ([]NamedObject, error) { return c.ListInstanceTypes(t.Context()) }},
 		{"layouts", "instanceTypeLayouts", func(c *Client) ([]NamedObject, error) { return c.ListLayouts(t.Context()) }},
-		{"plans", "servicePlans", func(c *Client) ([]NamedObject, error) { return c.ListServicePlans(t.Context(), 1, 2) }},
+		{"plans", "servicePlans", func(c *Client) ([]NamedObject, error) { return c.ListServicePlans(t.Context(), 1) }},
 		{"networks", "networks", func(c *Client) ([]NamedObject, error) { return c.ListNetworks(t.Context(), 1) }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

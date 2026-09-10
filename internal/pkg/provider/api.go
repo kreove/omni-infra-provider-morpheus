@@ -13,10 +13,14 @@ import (
 	"time"
 )
 
-// listPageSize caps lookup listings. Morpheus paginates at 25 by default,
-// which silently hides objects from a name lookup on any appliance with more
-// than a handful of them.
-const listPageSize = "1000"
+// listPageSize is how many rows each listing request asks for. Morpheus
+// paginates at 25 by default, which silently hides objects from a name lookup
+// on any appliance with more than a handful of them.
+const listPageSize = 250
+
+// listPageLimit bounds how many pages a listing will walk, so a paging bug on
+// either side cannot spin forever. 200 pages is 50,000 rows.
+const listPageLimit = 200
 
 // NamedObject is the identity subset shared by the Morpheus objects this
 // provider resolves by ID or name.
@@ -30,6 +34,11 @@ type NamedObject struct {
 	// the layout authoritative -- the instance type is read off the layout
 	// rather than being resolved separately and used to find one.
 	InstanceType ObjectRef `json:"instanceType"`
+
+	// ProvisionType is the technology a layout provisions with, reported by
+	// layouts and by service plans. It is how plans are narrowed to the ones
+	// the chosen layout can actually use.
+	ProvisionType ObjectRef `json:"provisionType"`
 }
 
 // ObjectRef is a Morpheus object referenced from inside another one.
@@ -86,7 +95,7 @@ func (c *Client) ListInstancesByName(ctx context.Context, name string) ([]Instan
 	if err := c.do(ctx, request{
 		method: http.MethodGet,
 		path:   "/api/instances",
-		query:  url.Values{"name": {name}, "max": {listPageSize}},
+		query:  url.Values{"name": {name}, "max": {itoa(listPageSize)}},
 		out:    &result,
 	}); err != nil {
 		return nil, err
@@ -189,7 +198,7 @@ func (c *Client) ListVirtualImagesByName(ctx context.Context, name string) ([]Vi
 	if err := c.do(ctx, request{
 		method: http.MethodGet,
 		path:   "/api/virtual-images",
-		query:  url.Values{"name": {name}, "max": {listPageSize}},
+		query:  url.Values{"name": {name}, "max": {itoa(listPageSize)}},
 		out:    &result,
 	}); err != nil {
 		return nil, err
@@ -269,28 +278,54 @@ func (c *Client) DeleteVirtualImage(ctx context.Context, id int) error {
 	})
 }
 
-// listNamed reads a list endpoint into a slice of NamedObject.
+// listNamed reads every page of a list endpoint into a slice of NamedObject.
+//
+// It pages rather than asking for one large page. A single capped request
+// cannot tell "this is everything" from "this is the first N", and silently
+// keeping the first N produced exactly the failure this guards against: a plan
+// that existed, reported as not existing, alongside a list of unrelated ones.
 func (c *Client) listNamed(ctx context.Context, path, key string, query url.Values) ([]NamedObject, error) {
 	if query == nil {
 		query = url.Values{}
 	}
 
-	query.Set("max", listPageSize)
+	var objects []NamedObject
 
-	// The response shape differs per endpoint only in the key holding the
-	// array, so it is decoded generically and the key picked out afterwards.
-	var raw map[string]json.RawMessage
+	for page := range listPageLimit {
+		query.Set("max", itoa(listPageSize))
+		query.Set("offset", itoa(page*listPageSize))
 
-	if err := c.do(ctx, request{
-		method: http.MethodGet,
-		path:   path,
-		query:  query,
-		out:    &raw,
-	}); err != nil {
-		return nil, err
+		// The response shape differs per endpoint only in the key holding the
+		// array, so it is decoded generically and the key picked out afterwards.
+		var raw map[string]json.RawMessage
+
+		if err := c.do(ctx, request{
+			method: http.MethodGet,
+			path:   path,
+			query:  query,
+			out:    &raw,
+		}); err != nil {
+			return nil, err
+		}
+
+		batch, err := decodeNamedList(raw, key, path)
+		if err != nil {
+			return nil, err
+		}
+
+		objects = append(objects, batch...)
+
+		// A short page is the last one. An exactly-full page might not be, so
+		// another request is made to find out.
+		if len(batch) < listPageSize {
+			return objects, nil
+		}
 	}
 
-	return decodeNamedList(raw, key, path)
+	return nil, fmt.Errorf(
+		"Morpheus returned more than %d %s; refusing to page further",
+		listPageLimit*listPageSize, key,
+	)
 }
 
 // ListGroups returns Morpheus groups (sites).
@@ -319,19 +354,18 @@ func (c *Client) ListLayouts(ctx context.Context) ([]NamedObject, error) {
 	return c.listNamed(ctx, "/api/library/layouts", "instanceTypeLayouts", nil)
 }
 
-// ListServicePlans returns service plans available for a layout and cloud.
+// ListServicePlans returns the service plans for one provision type.
 //
-// The filters matter: an unfiltered listing includes plans belonging to other
-// hypervisors, so a name lookup can resolve to a plan Morpheus will then
-// reject for this layout.
-func (c *Client) ListServicePlans(ctx context.Context, layoutID, cloudID int) ([]NamedObject, error) {
+// The filter matters, and the parameter name matters more. /api/service-plans
+// filters on provisionTypeId; it ignores layoutId and zoneId rather than
+// rejecting them, so passing those returns every plan on the appliance. On a
+// Morpheus managing public clouds that is hundreds of Azure and AKS plans, and
+// the one KVM plan an operator is looking for may not even be on the first
+// page.
+func (c *Client) ListServicePlans(ctx context.Context, provisionTypeID int) ([]NamedObject, error) {
 	query := url.Values{}
-	if layoutID > 0 {
-		query.Set("layoutId", itoa(layoutID))
-	}
-
-	if cloudID > 0 {
-		query.Set("zoneId", itoa(cloudID))
+	if provisionTypeID > 0 {
+		query.Set("provisionTypeId", itoa(provisionTypeID))
 	}
 
 	return c.listNamed(ctx, "/api/service-plans", "servicePlans", query)
