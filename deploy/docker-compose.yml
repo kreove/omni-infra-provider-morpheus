@@ -1,6 +1,6 @@
 services:
   omni-infra-provider-morpheus:
-    image: ghcr.io/kreove/omni-infra-provider-morpheus:latest
+    image: ${PROVIDER_IMAGE:?PROVIDER_IMAGE is not set}
     container_name: omni-infra-provider-morpheus
     restart: unless-stopped
     env_file:

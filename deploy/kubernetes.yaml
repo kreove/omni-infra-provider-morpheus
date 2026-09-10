@@ -40,7 +40,7 @@ spec:
         runAsUser: 65532
       containers:
         - name: provider
-          image: ghcr.io/kreove/omni-infra-provider-morpheus:latest
+          image: ghcr.io/kreove/omni-infra-provider-morpheus:VERSION
           envFrom:
             - secretRef:
                 name: omni-infra-provider-morpheus
