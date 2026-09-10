@@ -19,10 +19,6 @@ import (
 // provider targets.
 const mvmProviderType = "mvm"
 
-// defaultInstanceTypeCode is Morpheus's built-in instance type for provisioning
-// a plain VM from an image, which is what a Talos node is.
-const defaultInstanceTypeCode = "vm"
-
 // defaultOSTypeCode is the generic Linux OS type. Morpheus ships no Talos
 // entry, and the field only drives cosmetic and agent-related behaviour that
 // this provider disables anyway.
@@ -152,9 +148,5 @@ func applyDefaults(value *data.Data) {
 
 	if value.OSType == "" {
 		value.OSType = defaultOSTypeCode
-	}
-
-	if value.InstanceType.IsZero() && value.InstanceTypeCode == "" {
-		value.InstanceTypeCode = defaultInstanceTypeCode
 	}
 }

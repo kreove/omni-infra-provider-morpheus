@@ -28,10 +28,12 @@ type target struct {
 
 // resolveTarget turns a Machine Class into concrete Morpheus IDs.
 //
-// The order matters: layout depends on instance type, and plans, networks and
-// pools are all filtered by the resolved layout and cloud, so resolving them
-// in dependency order both narrows each lookup and reports the first genuinely
-// wrong field rather than a downstream symptom of it.
+// The layout is authoritative. It selects the hypervisor and names its own
+// instance type, so the instance type is read off it rather than resolved
+// separately -- which also means plans, networks and pools can be filtered by
+// the resolved layout and cloud. Resolving in this order narrows each lookup
+// and reports the first genuinely wrong field rather than a downstream symptom
+// of it.
 func (p *Provisioner) resolveTarget(ctx context.Context, providerData data.Data) (*target, error) {
 	resolved := &target{}
 
@@ -55,36 +57,42 @@ func (p *Provisioner) resolveTarget(ctx context.Context, providerData data.Data)
 		return nil, err
 	}
 
-	instanceTypes, err := p.client.ListInstanceTypes(ctx)
+	layouts, err := p.client.ListLayouts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list Morpheus instance types: %w", err)
+		return nil, fmt.Errorf("failed to list Morpheus layouts: %w", err)
 	}
 
-	instanceTypeRef := providerData.InstanceType
-	if instanceTypeRef.IsZero() {
-		// Fall back to the code, which is how the built-in types are
-		// identified consistently across appliances.
-		match, cerr := matchCode(providerData.InstanceTypeCode, instanceTypes)
-		if cerr != nil {
-			return nil, cerr
-		}
-
-		resolved.instanceType = match
-	} else {
-		resolved.instanceType, err = matchRef(instanceTypeRef, instanceTypes, "instance_type")
+	// An explicitly configured instance type only narrows the candidates, for
+	// the uncommon case of one layout name existing under two instance types.
+	// It is never the source of truth.
+	if !providerData.InstanceType.IsZero() || providerData.InstanceTypeCode != "" {
+		layouts, err = p.filterLayoutsByInstanceType(ctx, layouts, providerData)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	layouts, err := p.client.ListLayouts(ctx, resolved.instanceType.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list Morpheus layouts: %w", err)
-	}
-
 	resolved.layout, err = matchRef(providerData.Layout, layouts, "layout")
 	if err != nil {
 		return nil, err
+	}
+
+	// The layout names the instance type it belongs to, and Morpheus
+	// provisions from that pair. Reading it off the layout is what stops the
+	// two disagreeing: resolving an instance type separately and using it to
+	// find a layout meant a layout under any other type could not be selected
+	// at all, however correct it was.
+	resolved.instanceType = NamedObject{
+		ID:   resolved.layout.InstanceType.ID,
+		Name: resolved.layout.InstanceType.Name,
+		Code: resolved.layout.InstanceType.Code,
+	}
+
+	if resolved.instanceType.Code == "" {
+		return nil, fmt.Errorf(
+			"Morpheus layout %q (id %d) reports no instance type code, which is required to provision from it",
+			resolved.layout.Name, resolved.layout.ID,
+		)
 	}
 
 	plans, err := p.client.ListServicePlans(ctx, resolved.layout.ID, resolved.cloud.ID)
@@ -182,4 +190,50 @@ func matchCode(code string, objects []NamedObject) (NamedObject, error) {
 		"instance_type_code %q does not exist in Morpheus; available: %s",
 		code, describeOptions(objects),
 	)
+}
+
+// filterLayoutsByInstanceType narrows layout candidates to one instance type.
+//
+// This is a disambiguator, not a selector. It exists for an appliance where the
+// same layout name appears under more than one instance type; the matched
+// layout still supplies the instance type actually used.
+func (p *Provisioner) filterLayoutsByInstanceType(
+	ctx context.Context,
+	layouts []NamedObject,
+	providerData data.Data,
+) ([]NamedObject, error) {
+	instanceTypes, err := p.client.ListInstanceTypes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Morpheus instance types: %w", err)
+	}
+
+	var wanted NamedObject
+
+	if providerData.InstanceType.IsZero() {
+		wanted, err = matchCode(providerData.InstanceTypeCode, instanceTypes)
+	} else {
+		wanted, err = matchRef(providerData.InstanceType, instanceTypes, "instance_type")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]NamedObject, 0, len(layouts))
+
+	for _, layout := range layouts {
+		if layout.InstanceType.ID == wanted.ID {
+			filtered = append(filtered, layout)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf(
+			"no Morpheus layout belongs to instance type %q (id %d); "+
+				"leave instance_type unset to choose from every layout",
+			wanted.Name, wanted.ID,
+		)
+	}
+
+	return filtered, nil
 }

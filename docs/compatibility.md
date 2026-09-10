@@ -32,11 +32,13 @@ If nodes boot but sit in maintenance mode without joining, this is the first thi
 
 The Xen Orchestra provider hit exactly this class of problem — XO built a config drive whose *contents* were correct but whose *layout* Talos could not detect — and had to build the drive itself. If Morpheus turns out to mangle user data in a way that cannot be disabled, the equivalent fix here is heavier: Morpheus owns config-drive generation, so there is no obvious injection point.
 
-### 2. Instance type and layout defaults
+### 2. Layout selection
 
-`instance_type_code` defaults to `vm`, which is Morpheus's built-in type for provisioning a plain VM from an image. If that code does not exist on your appliance, the provider fails at `ensureTarget` with a list of the instance types that *do* exist — set `instance_type` or `instance_type_code` from that list.
+The layout is the only thing you must name, and it is authoritative: it selects the hypervisor and reports the instance type the provider provisions from.
 
-Layouts are not defaulted, because a layout determines the provision type and only an MVM layout will work here.
+Nothing is defaulted here. An earlier version defaulted `instance_type_code` to `vm` on the assumption that Morpheus ships a generic "plain VM" type; that was never verified, and HPE's own MVM example pairs *Ubuntu* with *Single KVM VM* instead. Reading the instance type off the layout removed the need to assume anything.
+
+What remains uncertain is only which layouts your appliance actually offers, and whether the MVM one is usable for a Talos image. A wrong or missing layout fails at `ensureTarget` with every candidate listed.
 
 ### 3. Sizing overrides
 
