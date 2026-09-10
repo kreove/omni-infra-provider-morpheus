@@ -55,8 +55,8 @@ A `ref` is:
 
 ```yaml
 cloud:
-  id: 3        # optional, wins when set
-  name: MVM    # optional
+  id: 3                      # optional, wins when set
+  name: hvm.example.com    # optional
 ```
 
 ### What a layout is
@@ -66,8 +66,8 @@ cloud:
 Morpheus's Library nests layouts under instance types, and each layout names a *provision type*:
 
 ```
-Instance Type  "Morpheus VM"  (code: vm)
-  └── Layout   "MVM VM"       (provisionType.code: mvm)      <- this provider
+Instance Type  "Morpheus VM"
+  └── Layout   "Single HVM"   (provisionType.code: mvm)      <- this provider
   └── Layout   "VMware VM"    (provisionType.code: vmware)
   └── Layout   "Amazon VM"    (provisionType.code: amazon)
 ```
@@ -90,7 +90,7 @@ Then set either form:
 
 ```yaml
 layout:
-  name: MVM VM      # readable
+  name: Single HVM      # readable
 ```
 
 ```yaml
@@ -111,7 +111,7 @@ Both fields remain, as an optional **narrowing** for a single situation: an appl
 instance_type:
   name: Morpheus VM
 layout:
-  name: Single KVM VM
+  name: Single HVM
 ```
 
 ### The other Morpheus objects, briefly

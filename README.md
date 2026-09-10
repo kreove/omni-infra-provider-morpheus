@@ -92,19 +92,16 @@ In Omni, create a Machine Class backed by this provider and give it provider dat
 
 ```yaml
 cloud:
-  name: MVM
+  name: hvm.example.com
 group:
-  name: Talos
+  name: Homelab
 layout:
-  name: MVM VM
+  name: Single HVM
 plan:
-  name: Custom
+  name: 4 CPU, 4GB Memory
 network:
-  name: vlan100
+  name: Compute VLAN 110
 
-cores: 4
-memory: 8192
-disk_size: 32
 architecture: amd64
 image_format: qcow2
 ```

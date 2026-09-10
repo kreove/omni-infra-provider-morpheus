@@ -1,5 +1,9 @@
 # Machine Class provider data for the Morpheus infrastructure provider.
 #
+# The values below are the shape of a working MVM configuration. Object names
+# are appliance-specific -- "Single HVM" is a real layout name, but yours may
+# differ -- so treat them as a pattern, not as values to copy.
+#
 # Every Morpheus object can be given as a name or a numeric id. The id wins
 # when both are set, so a class can be written readably and pinned later.
 #
@@ -8,28 +12,29 @@
 #     "$MORPHEUS_ENDPOINT/api/zones?max=100" | jq '.zones[] | {id, name}'
 
 cloud:
-  name: MVM
+  name: hvm.example.com
 group:
-  name: Talos
+  name: Homelab
 layout:
-  name: MVM VM
+  name: Single HVM
 plan:
-  name: Custom
+  name: 4 CPU, 4GB Memory
 network:
-  name: vlan100
+  name: Compute VLAN 110
 
 # Optional: pin the MVM compute pool. Morpheus chooses one when unset.
-#resource_pool:
-#  name: Cluster-01
+resource_pool:
+  name: hvm-cluster01.example.com
 
 # Optional: pin a datastore, or use "auto" / "autoCluster".
-#datastore: auto
+datastore: mvm-volumes
 
-# Optional sizing overrides. Morpheus sizes an instance from its service plan;
-# these only take effect on a plan that permits custom sizing.
-cores: 4
-memory: 8192
-disk_size: 32
+# Sizing comes from the service plan -- the one above is already 4 CPU and 4 GB.
+# These overrides are only honoured on a plan that permits custom sizing, and
+# are ignored on a fixed one, so leave them out unless your plan allows it.
+#cores: 4
+#memory: 4096
+#disk_size: 32
 
 architecture: amd64
 

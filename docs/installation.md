@@ -87,15 +87,15 @@ A minimal class:
 
 ```yaml
 cloud:
-  name: MVM
+  name: hvm.example.com
 group:
-  name: Talos
+  name: Homelab
 layout:
-  name: MVM VM
+  name: Single HVM
 plan:
-  name: Custom
+  name: 4 CPU, 4GB Memory
 network:
-  name: vlan100
+  name: Compute VLAN 110
 architecture: amd64
 ```
 
