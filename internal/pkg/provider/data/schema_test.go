@@ -6,14 +6,16 @@ package data
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 type schemaProperty struct {
-	Type       string                    `json:"type"`
-	Default    *json.RawMessage          `json:"default"`
-	Minimum    *float64                  `json:"minimum"`
-	Properties map[string]schemaProperty `json:"properties"`
+	Type        string                    `json:"type"`
+	Description string                    `json:"description"`
+	Default     *json.RawMessage          `json:"default"`
+	Minimum     *float64                  `json:"minimum"`
+	Properties  map[string]schemaProperty `json:"properties"`
 }
 
 type schemaDocument struct {
@@ -119,6 +121,66 @@ func TestRefObjectsAcceptIDAndName(t *testing.T) {
 
 		if _, ok = prop.Properties["name"]; !ok {
 			t.Errorf("%s has no name property", name)
+		}
+	}
+}
+
+// Omni renders a field's description as a tooltip only for leaf properties.
+// A description on an object -- cloud, layout, instance_type -- is not shown
+// at all, so guidance written there is invisible to someone filling in the
+// form, which is exactly where it is needed. Every leaf therefore carries its
+// own.
+func TestEveryLeafFieldHasADescription(t *testing.T) {
+	var walk func(props map[string]schemaProperty, prefix string)
+
+	walk = func(props map[string]schemaProperty, prefix string) {
+		for name, prop := range props {
+			path := prefix + name
+
+			if len(prop.Properties) > 0 {
+				walk(prop.Properties, path+".")
+
+				continue
+			}
+
+			if prop.Description == "" {
+				t.Errorf("%s has no description; Omni will render it with no tooltip", path)
+			}
+		}
+	}
+
+	walk(parseSchema(t).Properties, "")
+}
+
+// The optional fields are the ones an operator is most likely to fill in
+// needlessly, so each has to say it can be left alone.
+func TestOptionalFieldsSayTheyAreOptional(t *testing.T) {
+	doc := parseSchema(t)
+
+	for _, path := range []string{
+		"instance_type.id", "instance_type.name", "instance_type_code",
+		"resource_pool.id", "resource_pool.name",
+		"image.id", "image.name",
+	} {
+		parts := strings.SplitN(path, ".", 2)
+
+		prop, ok := doc.Properties[parts[0]]
+		if !ok {
+			t.Errorf("%s is missing from the schema", path)
+
+			continue
+		}
+
+		if len(parts) == 2 {
+			if prop, ok = prop.Properties[parts[1]]; !ok {
+				t.Errorf("%s is missing from the schema", path)
+
+				continue
+			}
+		}
+
+		if !strings.HasPrefix(prop.Description, "Optional.") {
+			t.Errorf("%s does not start its description with \"Optional.\": %q", path, prop.Description)
 		}
 	}
 }
