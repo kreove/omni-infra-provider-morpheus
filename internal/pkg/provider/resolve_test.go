@@ -177,3 +177,48 @@ func TestNonLayoutObjectsHaveNoInstanceType(t *testing.T) {
 		t.Errorf("instance type = %+v, want empty for a non-layout object", got.InstanceType)
 	}
 }
+
+// Morpheus presents a code as "used as a unique identifier in the API and CLI",
+// and this provider prints codes in every candidate listing, so an operator
+// reaching for an unambiguous handle reaches for that. Matching only names
+// meant a pasted code failed with "does not exist" beside a list showing it.
+func TestMatchRefFallsBackToTheCode(t *testing.T) {
+	plans := []NamedObject{
+		{ID: 30, Name: "4 CPU, 4GB Memory", Code: "kvm-vm-4-4096"},
+		{ID: 31, Name: "2 CPU, 8GB Memory", Code: "kvm-vm-2-8192"},
+	}
+
+	got, err := matchRef(data.Ref{Name: "kvm-vm-4-4096"}, plans, "plan")
+	if err != nil {
+		t.Fatalf("a code should resolve: %v", err)
+	}
+
+	if got.ID != 30 {
+		t.Errorf("matched id %d, want 30", got.ID)
+	}
+}
+
+// A name must still win over a code, so an object named the same as another's
+// code cannot be hijacked by it.
+func TestMatchRefPrefersNameOverCode(t *testing.T) {
+	objects := []NamedObject{
+		{ID: 1, Name: "shared", Code: "something-else"},
+		{ID: 2, Name: "other", Code: "shared"},
+	}
+
+	got, err := matchRef(data.Ref{Name: "shared"}, objects, "plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.ID != 1 {
+		t.Errorf("matched id %d, want the name match (1)", got.ID)
+	}
+}
+
+func TestMatchRefReportsNameOrCodeWhenMissing(t *testing.T) {
+	_, err := matchRef(data.Ref{Name: "nope"}, testObjects, "plan")
+	if err == nil || !strings.Contains(err.Error(), "by name or code") {
+		t.Fatalf("error should say both were tried, got %v", err)
+	}
+}

@@ -31,6 +31,17 @@ If you change the provider ID with `--id`, the Omni service account name must ma
 
 Every Morpheus object is given as an object with `id`, `name`, or both. **The `id` wins when both are set.** This means a Machine Class can be written readably against names and pinned to IDs later without changing shape.
 
+The `name` field also accepts the object's **code** — the value Morpheus labels *"used as a unique identifier in the API and CLI"*. A name is tried first, then a code, so either works:
+
+```yaml
+plan:
+  name: 4 CPU, 4GB Memory   # the name
+```
+```yaml
+plan:
+  name: kvm-vm-4-4096       # the code, equally valid
+```
+
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `cloud` | ref | yes | | Morpheus cloud (zone) to provision into |
