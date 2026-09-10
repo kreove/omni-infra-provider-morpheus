@@ -30,14 +30,21 @@ Store secrets in a container secret store, protected environment file, or Kubern
 
 ## Image Factory URL security
 
-The Image Factory base URL is provider-level configuration rather than Machine Class data. This prevents ordinary Machine Class input from redirecting the provider to arbitrary URLs.
+The provider does not accept an Image Factory URL from any source. It asks Omni for the installation medium it needs, and Omni returns the URL. Machine Class data cannot redirect the provider to an arbitrary host, and neither can provider configuration.
+
+**The returned URL may contain credentials**, as userinfo or as a download token in the query string, depending on how the factory Omni talks to is configured. The provider treats it as a secret:
+
+- It is never written to a log line.
+- It is never stored in the Morpheus virtual image description, which records the Talos version, architecture and schematic instead.
+- It is never used to derive the cached image name, which comes from the medium's storage key.
+
+Keep this in mind if you add logging around the import path.
 
 Operators should:
 
-- Use HTTPS.
 - Trust only controlled certificate authorities.
 - Restrict outbound access from the provider container where appropriate.
-- Review private Image Factory access controls.
+- Review private Image Factory access controls in Omni.
 
 The provider downloads images itself rather than having Morpheus fetch them, so the provider host needs outbound HTTPS access to the Image Factory — factor this into your network segmentation.
 

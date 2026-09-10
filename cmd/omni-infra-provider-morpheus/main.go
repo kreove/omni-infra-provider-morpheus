@@ -45,7 +45,6 @@ var cfg struct {
 	morpheusUsername       string
 	morpheusPassword       string
 	morpheusInsecure       bool
-	imageFactoryBaseURL    string
 	omniInsecureSkipVerify bool
 }
 
@@ -90,7 +89,7 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		provisioner := provider.NewProvisioner(morpheusClient, cfg.imageFactoryBaseURL)
+		provisioner := provider.NewProvisioner(morpheusClient)
 
 		infrastructureProvider, err := infra.NewProvider(
 			meta.ProviderID,
@@ -118,7 +117,6 @@ var rootCmd = &cobra.Command{
 			zap.String("version", version),
 			zap.String("provider_id", meta.ProviderID),
 			zap.String("morpheus_endpoint", cfg.morpheusEndpoint),
-			zap.String("image_factory_base_url", cfg.imageFactoryBaseURL),
 		)
 
 		return infrastructureProvider.Run(
@@ -162,7 +160,6 @@ func normalizeConfig() {
 	cfg.morpheusEndpoint = strings.TrimSpace(cfg.morpheusEndpoint)
 	cfg.morpheusToken = strings.TrimSpace(cfg.morpheusToken)
 	cfg.morpheusUsername = strings.TrimSpace(cfg.morpheusUsername)
-	cfg.imageFactoryBaseURL = strings.TrimSpace(cfg.imageFactoryBaseURL)
 }
 
 func stripWhitespace(value string) string {
@@ -285,12 +282,6 @@ func init() {
 		"morpheus-endpoint",
 		firstNonEmpty(os.Getenv("MORPHEUS_ENDPOINT"), os.Getenv("MORPHEUS_URL")),
 		"Morpheus appliance base URL, e.g. https://morpheus.example.com (defaults to MORPHEUS_ENDPOINT, then MORPHEUS_URL)",
-	)
-	rootCmd.Flags().StringVar(
-		&cfg.imageFactoryBaseURL,
-		"image-factory-base-url",
-		firstNonEmpty(os.Getenv("TALOS_IMAGE_FACTORY_BASE_URL"), "https://factory.talos.dev"),
-		"Talos Image Factory base URL",
 	)
 	rootCmd.Flags().StringVar(
 		&cfg.morpheusToken,
