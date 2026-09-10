@@ -36,7 +36,7 @@ Then either generate an API token for it under **user settings → API access**,
 cp deploy/example.env deploy/.env
 ```
 
-Fill in the values, then:
+Fill in the values — including `PROVIDER_IMAGE`, which must name an explicit released version. While this provider is alpha, every release is a prerelease, so **no `:latest` tag is published**; pick a tag from the [releases page](https://github.com/kreove/omni-infra-provider-morpheus/releases). Then:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
@@ -47,7 +47,7 @@ The Compose file mounts a 4 GB tmpfs at `/tmp`. The provider stages Talos images
 
 ### Kubernetes
 
-Edit the Secret in `deploy/kubernetes.yaml`, then:
+Edit the Secret in `deploy/kubernetes.yaml`, and replace `:VERSION` in the image reference with a released tag — there is no `:latest` while the provider is in alpha. Then:
 
 ```bash
 kubectl apply -f deploy/kubernetes.yaml

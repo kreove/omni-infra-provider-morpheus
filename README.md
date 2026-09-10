@@ -82,6 +82,8 @@ Fill in `OMNI_ENDPOINT`, `OMNI_SERVICE_ACCOUNT_KEY`, `MORPHEUS_ENDPOINT`, and ei
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+`PROVIDER_IMAGE` must name an explicit released version: releases are prereleases while this provider is alpha, so no `:latest` tag is published.
+
 See [Installation](docs/installation.md) for Kubernetes and for building from source.
 
 ### 4. Create a Machine Class
