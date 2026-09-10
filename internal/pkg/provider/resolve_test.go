@@ -123,3 +123,57 @@ func TestMatchCodeRejectsUnknown(t *testing.T) {
 		t.Fatalf("expected an instance_type_code error, got %v", err)
 	}
 }
+
+// A layout carries the instance type it belongs to, and that is what gets
+// provisioned. Deriving it this way is what removed the need to guess an
+// instance type code before a layout could be found at all.
+func TestMatchRefCarriesTheLayoutsInstanceType(t *testing.T) {
+	layouts := []NamedObject{
+		{ID: 6, Name: "MVM VM", Code: "mvm-1.0", InstanceType: ObjectRef{ID: 5, Name: "Morpheus VM", Code: "vm"}},
+		{ID: 7, Name: "VMware VM", Code: "vmware-1.0", InstanceType: ObjectRef{ID: 5, Name: "Morpheus VM", Code: "vm"}},
+	}
+
+	got, err := matchRef(data.Ref{Name: "MVM VM"}, layouts, "layout")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.InstanceType.Code != "vm" {
+		t.Errorf("instance type code = %q, want vm", got.InstanceType.Code)
+	}
+
+	if got.InstanceType.ID != 5 {
+		t.Errorf("instance type id = %d, want 5", got.InstanceType.ID)
+	}
+}
+
+// The previous design resolved an instance type first and filtered layouts by
+// it, so a perfectly good MVM layout under any other instance type could not be
+// selected at all. A layout on a custom instance type must now resolve without
+// the Machine Class naming that type.
+func TestLayoutOnACustomInstanceTypeIsSelectable(t *testing.T) {
+	layouts := []NamedObject{
+		{ID: 9, Name: "Custom KVM", InstanceType: ObjectRef{ID: 11, Name: "Talos", Code: "talos-custom"}},
+	}
+
+	got, err := matchRef(data.Ref{Name: "Custom KVM"}, layouts, "layout")
+	if err != nil {
+		t.Fatalf("a layout under a custom instance type must resolve: %v", err)
+	}
+
+	if got.InstanceType.Code != "talos-custom" {
+		t.Errorf("instance type code = %q, want talos-custom", got.InstanceType.Code)
+	}
+}
+
+// Only layouts report an instance type; every other listing leaves it empty.
+func TestNonLayoutObjectsHaveNoInstanceType(t *testing.T) {
+	got, err := matchRef(data.Ref{ID: 1}, testObjects, "cloud")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.InstanceType != (ObjectRef{}) {
+		t.Errorf("instance type = %+v, want empty for a non-layout object", got.InstanceType)
+	}
+}

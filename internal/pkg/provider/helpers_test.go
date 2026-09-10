@@ -92,17 +92,23 @@ func TestApplyDefaults(t *testing.T) {
 		t.Errorf("os_type = %q, want %q", value.OSType, defaultOSTypeCode)
 	}
 
-	if value.InstanceTypeCode != defaultInstanceTypeCode {
-		t.Errorf("instance_type_code = %q, want %q", value.InstanceTypeCode, defaultInstanceTypeCode)
+	// instance_type_code is deliberately not defaulted. The layout supplies the
+	// instance type, and the previous default guessed at a code ("vm") that is
+	// not guaranteed to exist on any given appliance.
+	if value.InstanceTypeCode != "" {
+		t.Errorf("instance_type_code = %q, want it left unset", value.InstanceTypeCode)
 	}
 }
 
-// An explicitly chosen instance type must not have the default code applied on
-// top of it, or the code would win over the operator's choice in resolveTarget.
+// An explicitly chosen instance type must survive defaulting untouched.
 func TestApplyDefaultsLeavesExplicitInstanceType(t *testing.T) {
 	value := data.Data{InstanceType: data.Ref{ID: 5}}
 
 	applyDefaults(&value)
+
+	if value.InstanceType.ID != 5 {
+		t.Errorf("instance_type.id = %d, want 5", value.InstanceType.ID)
+	}
 
 	if value.InstanceTypeCode != "" {
 		t.Errorf("instance_type_code = %q, want empty when instance_type is set", value.InstanceTypeCode)

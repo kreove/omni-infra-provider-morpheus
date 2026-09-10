@@ -334,7 +334,7 @@ func TestListNamedDecodesEachEndpointKey(t *testing.T) {
 		{"clouds", "zones", func(c *Client) ([]NamedObject, error) { return c.ListClouds(t.Context()) }},
 		{"groups", "groups", func(c *Client) ([]NamedObject, error) { return c.ListGroups(t.Context()) }},
 		{"instance types", "instanceTypes", func(c *Client) ([]NamedObject, error) { return c.ListInstanceTypes(t.Context()) }},
-		{"layouts", "instanceTypeLayouts", func(c *Client) ([]NamedObject, error) { return c.ListLayouts(t.Context(), 1) }},
+		{"layouts", "instanceTypeLayouts", func(c *Client) ([]NamedObject, error) { return c.ListLayouts(t.Context()) }},
 		{"plans", "servicePlans", func(c *Client) ([]NamedObject, error) { return c.ListServicePlans(t.Context(), 1, 2) }},
 		{"networks", "networks", func(c *Client) ([]NamedObject, error) { return c.ListNetworks(t.Context(), 1) }},
 	} {

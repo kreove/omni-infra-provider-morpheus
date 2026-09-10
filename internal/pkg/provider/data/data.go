@@ -37,9 +37,11 @@ type Data struct {
 	Cloud Ref `yaml:"cloud"`
 	// Group is the Morpheus group (site) that owns the instance.
 	Group Ref `yaml:"group"`
-	// InstanceType selects the library instance type. Code is accepted in
-	// addition to ID and name because instance type codes are stable across
-	// appliances in a way IDs are not.
+	// InstanceType optionally narrows which layouts are considered, for an
+	// appliance where one layout name exists under more than one instance
+	// type. It never selects the instance type used: the resolved layout
+	// supplies that. Code is accepted alongside ID and name because instance
+	// type codes are stable across appliances in a way IDs are not.
 	InstanceType     Ref    `yaml:"instance_type,omitempty"`
 	InstanceTypeCode string `yaml:"instance_type_code,omitempty"`
 	// Layout is the library layout, which determines the provision type. It
