@@ -24,6 +24,19 @@ type NamedObject struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 	Code string `json:"code"`
+
+	// InstanceType is the library instance type a layout belongs to. Only
+	// layouts report it; it is empty for every other object. It is what makes
+	// the layout authoritative -- the instance type is read off the layout
+	// rather than being resolved separately and used to find one.
+	InstanceType ObjectRef `json:"instanceType"`
+}
+
+// ObjectRef is a Morpheus object referenced from inside another one.
+type ObjectRef struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Code string `json:"code"`
 }
 
 // Instance is the subset of a Morpheus instance this provider acts on.
@@ -295,14 +308,15 @@ func (c *Client) ListInstanceTypes(ctx context.Context) ([]NamedObject, error) {
 	return c.listNamed(ctx, "/api/library/instance-types", "instanceTypes", nil)
 }
 
-// ListLayouts returns library layouts for an instance type.
-func (c *Client) ListLayouts(ctx context.Context, instanceTypeID int) ([]NamedObject, error) {
-	query := url.Values{}
-	if instanceTypeID > 0 {
-		query.Set("instanceTypeId", itoa(instanceTypeID))
-	}
-
-	return c.listNamed(ctx, "/api/library/layouts", "instanceTypeLayouts", query)
+// ListLayouts returns every library layout, each carrying the instance type it
+// belongs to.
+//
+// It is deliberately unfiltered. Filtering by instance type would require
+// resolving one first, which is the dependency this provider inverts: the
+// layout selects the hypervisor and names its own instance type, so it is the
+// thing an operator picks and everything else follows from it.
+func (c *Client) ListLayouts(ctx context.Context) ([]NamedObject, error) {
+	return c.listNamed(ctx, "/api/library/layouts", "instanceTypeLayouts", nil)
 }
 
 // ListServicePlans returns service plans available for a layout and cloud.

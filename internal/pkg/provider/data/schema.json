@@ -29,7 +29,7 @@
     },
     "instance_type": {
       "type": "object",
-      "description": "Library instance type. Set id or name, or use instance_type_code.",
+      "description": "Optional. Narrows which layouts are considered when one layout name exists under more than one instance type. The layout still supplies the instance type used.",
       "properties": {
         "id": {
           "type": "integer",
@@ -42,12 +42,11 @@
     },
     "instance_type_code": {
       "type": "string",
-      "description": "Library instance type code, e.g. 'vm'. Used when instance_type is unset.",
-      "default": "vm"
+      "description": "Optional. Same narrowing as instance_type, by the instance type's stable code."
     },
     "layout": {
       "type": "object",
-      "description": "Library layout, which selects the provision type. Must be an MVM layout. Set id or name.",
+      "description": "Library layout, which selects the hypervisor and supplies the instance type. Must be an MVM layout. Set id or name.",
       "properties": {
         "id": {
           "type": "integer",

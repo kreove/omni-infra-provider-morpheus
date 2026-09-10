@@ -38,8 +38,8 @@ Every Morpheus object is given as an object with `id`, `name`, or both. **The `i
 | `layout` | ref | yes | | Library layout, which selects the hypervisor. Must be an MVM layout — see [What a layout is](#what-a-layout-is) |
 | `plan` | ref | yes | | Service plan sizing the instance |
 | `network` | ref | yes | | Network for the instance's primary NIC |
-| `instance_type` | ref | no | | Library instance type |
-| `instance_type_code` | string | no | `vm` | Instance type code, used when `instance_type` is unset |
+| `instance_type` | ref | no | | Narrows layout candidates only; the layout supplies the instance type used |
+| `instance_type_code` | string | no | | Same narrowing as `instance_type`, by the type's stable code |
 | `resource_pool` | ref | no | | MVM compute pool; Morpheus chooses when unset |
 | `datastore` | string | no | | Datastore ID, or `auto` / `autoCluster` |
 | `image` | ref | no | | Existing virtual image, bypassing the Image Factory download |
@@ -98,8 +98,21 @@ layout:
   id: 42            # pinned; wins if both are set
 ```
 
-> [!NOTE]
-> Layout lookup is **scoped to the resolved instance type**, which defaults to the code `vm`. If your MVM layout hangs off a custom instance type instead of the built-in "Morpheus VM", it will not appear in the provider's candidate list and the name will not resolve. The `instance type:` column above tells you which type each layout belongs to; when it is not `vm`, set `instance_type` or `instance_type_code` to match.
+### The layout supplies the instance type
+
+You do not need to set `instance_type` or `instance_type_code`. Morpheus reports the instance type on every layout, so the provider reads it off the layout you chose. Whatever the `instance type:` column showed above, that layout is selectable.
+
+This matters because instance types are not generic. HPE's own MVM example pairs the instance type *Ubuntu* with the layout *Single KVM VM*, and your appliance may differ again — there is no dependable "plain VM" type to assume. Following the layout to its instance type avoids assuming one.
+
+Both fields remain, as an optional **narrowing** for a single situation: an appliance where the same layout name exists under more than one instance type, making the name ambiguous. Setting either restricts the candidates before matching. The matched layout still supplies the instance type used, so the two can never disagree.
+
+```yaml
+# Only needed when a layout name is ambiguous.
+instance_type:
+  name: Morpheus VM
+layout:
+  name: Single KVM VM
+```
 
 ### The other Morpheus objects, briefly
 
@@ -108,7 +121,7 @@ layout:
 | `cloud` | The Morpheus cloud (called a *zone* in the API) holding the MVM hypervisor. |
 | `group` | The Morpheus group (a *site* in the API) that owns the instance. Groups scope visibility and permissions; they do not affect placement. |
 | `plan` | The service plan, which sizes the instance. See [Sizing is the service plan's job](#sizing-is-the-service-plans-job). |
-| `instance_type` | The Library instance type the layout belongs to. Rarely set directly — the default code `vm` is Morpheus's built-in type for provisioning a plain VM from an image. |
+| `instance_type` | The Library instance type a layout belongs to. Read off the layout, so you rarely set it — see [The layout supplies the instance type](#the-layout-supplies-the-instance-type). |
 | `resource_pool` | The MVM compute pool. Optional; Morpheus picks one when unset. |
 | `network` | The network attached to the VM's primary NIC. |
 
