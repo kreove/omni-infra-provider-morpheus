@@ -35,7 +35,7 @@ Every Morpheus object is given as an object with `id`, `name`, or both. **The `i
 | --- | --- | --- | --- | --- |
 | `cloud` | ref | yes | | Morpheus cloud (zone) to provision into |
 | `group` | ref | yes | | Morpheus group (site) that owns the instance |
-| `layout` | ref | yes | | Library layout; must be an MVM layout |
+| `layout` | ref | yes | | Library layout, which selects the hypervisor. Must be an MVM layout — see [What a layout is](#what-a-layout-is) |
 | `plan` | ref | yes | | Service plan sizing the instance |
 | `network` | ref | yes | | Network for the instance's primary NIC |
 | `instance_type` | ref | no | | Library instance type |
@@ -59,6 +59,59 @@ cloud:
   name: MVM    # optional
 ```
 
+### What a layout is
+
+`layout` is the field most likely to need explaining, because it is the one that decides **which hypervisor actually builds the VM**.
+
+Morpheus's Library nests layouts under instance types, and each layout names a *provision type*:
+
+```
+Instance Type  "Morpheus VM"  (code: vm)
+  └── Layout   "MVM VM"       (provisionType.code: mvm)      <- this provider
+  └── Layout   "VMware VM"    (provisionType.code: vmware)
+  └── Layout   "Amazon VM"    (provisionType.code: amazon)
+```
+
+Same instance type, same plan, same image — pick the vSphere layout instead of the MVM one and Morpheus provisions on vSphere. The layout *is* the choice of platform, which is why it is required and why it cannot be defaulted: nothing else in the Machine Class implies it.
+
+It also has to be an MVM layout specifically. This provider sends `config.poolProviderType: "mvm"` and `config.imageId`, both MVM-specific; pairing them with another provision type gives Morpheus a contradictory request.
+
+To list only the layouts this provider can use:
+
+```bash
+curl -sk -H "Authorization: Bearer $MORPHEUS_TOKEN" \
+  "$MORPHEUS_ENDPOINT/api/library/layouts?max=200" \
+  | jq -r '.instanceTypeLayouts[]
+           | select(.provisionType.code == "mvm")
+           | "\(.id)\t\(.name)\t(instance type: \(.instanceType.code))"'
+```
+
+Then set either form:
+
+```yaml
+layout:
+  name: MVM VM      # readable
+```
+
+```yaml
+layout:
+  id: 42            # pinned; wins if both are set
+```
+
+> [!NOTE]
+> Layout lookup is **scoped to the resolved instance type**, which defaults to the code `vm`. If your MVM layout hangs off a custom instance type instead of the built-in "Morpheus VM", it will not appear in the provider's candidate list and the name will not resolve. The `instance type:` column above tells you which type each layout belongs to; when it is not `vm`, set `instance_type` or `instance_type_code` to match.
+
+### The other Morpheus objects, briefly
+
+| Field | What it is |
+| --- | --- |
+| `cloud` | The Morpheus cloud (called a *zone* in the API) holding the MVM hypervisor. |
+| `group` | The Morpheus group (a *site* in the API) that owns the instance. Groups scope visibility and permissions; they do not affect placement. |
+| `plan` | The service plan, which sizes the instance. See [Sizing is the service plan's job](#sizing-is-the-service-plans-job). |
+| `instance_type` | The Library instance type the layout belongs to. Rarely set directly — the default code `vm` is Morpheus's built-in type for provisioning a plain VM from an image. |
+| `resource_pool` | The MVM compute pool. Optional; Morpheus picks one when unset. |
+| `network` | The network attached to the VM's primary NIC. |
+
 ### Sizing is the service plan's job
 
 This is the one place the Morpheus model differs meaningfully from the VergeOS and Xen Orchestra providers, where `cores`, `memory` and `disk_size` were required and authoritative.
@@ -77,9 +130,9 @@ curl -sk -H "Authorization: Bearer $MORPHEUS_TOKEN" \
   "$MORPHEUS_ENDPOINT/api/zones?max=100" | jq '.zones[] | {id, name}'
 ```
 
-The same pattern works for `/api/groups`, `/api/library/instance-types`, `/api/library/layouts`, `/api/service-plans` and `/api/networks`.
+The same pattern works for `/api/groups`, `/api/library/instance-types`, `/api/service-plans` and `/api/networks`. Layouts need the response key `instanceTypeLayouts` and are worth filtering by provision type — see [What a layout is](#what-a-layout-is).
 
-In practice you rarely need this: name a thing wrongly and the provider's error lists every candidate with its ID.
+In practice you rarely need any of this. Name a thing wrongly and the provider fails the Machine Request with every candidate listed, name and ID, so the fastest way to discover a value is to guess and read the error.
 
 ## Image format
 
