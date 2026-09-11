@@ -2,7 +2,7 @@
 
 ## Status
 
-This provider is **alpha**. It has now been exercised against a live Morpheus appliance (MVM on KVM with Ceph-backed storage), which turned up one genuine incompatibility — cloud-init user data is not passed to the guest, see below — that the provider now works around. Areas other than provisioning and config delivery remain lightly exercised.
+This provider is **alpha**. It has been exercised against a live Morpheus appliance (MVM on KVM with Ceph-backed storage) across the full machine lifecycle — see [What has been exercised](#what-has-been-exercised) — on one environment only. Live testing turned up one genuine incompatibility, cloud-init user data not being passed to the guest, which the provider now works around; see below.
 
 What it *is* built on:
 
@@ -15,20 +15,31 @@ Everything the provider sends is unit-tested for shape, and the paths listed bel
 
 ## What has been exercised
 
-Confirmed end to end on Morpheus with an MVM cloud, provisioning Talos v1.13.10:
+Confirmed against a live Morpheus appliance with an MVM cloud, on Talos v1.13.10:
 
-- Machine Class validation and every object lookup — cloud, group, layout, plan, network, resource pool, datastore
-- Talos Image Factory download, virtual image creation, upload and conversion
-- Image cache reuse: the second machine provisioned from the cached image rather than re-importing
-- Instance creation on MVM, including the SMBIOS serial that points a guest at the NoCloud server
-- Config delivery over HTTP, SideroLink registration, and Kubernetes coming up
-- A two-machine cluster — one control plane, one worker — reaching `Running` in Omni
+| Exercised | |
+| --- | --- |
+| Machine Class validation and object lookup | cloud, group, layout, plan, network, resource pool, datastore |
+| Image Factory download and import | virtual image created, uploaded and converted |
+| Image cache reuse | later machines provision from the cached image instead of re-importing |
+| Instance creation on MVM | including the SMBIOS serial pointing the guest at the NoCloud server |
+| Config delivery over HTTP | SideroLink registration and Kubernetes coming up |
+| Cluster creation | control plane and workers reaching `Running` in Omni |
+| Machine set scale up and down | |
+| Machine deletion | instance and volumes removed, NoCloud entry dropped |
+| Cluster deletion | every machine deprovisioned together |
+| Talos version upgrade | |
+| Kubernetes version upgrade | |
 
-Still unexercised, and the places to be careful:
+Omni applies Talos and Kubernetes upgrades in place, over SideroLink. The provider is not involved and builds no new image, so what those rows confirm is that upgrades work on provider-built machines and do not disturb them — not that the image pipeline runs again.
 
-- **Deprovisioning and scale-down.** The instance is deleted with `removeVolumes=true&force=true` and the NoCloud entry dropped; neither has been observed against a real instance.
-- **Provider restart while a machine is booting.** The token is persisted in Omni state and the datasource re-registered on every reconcile, so this should work by construction — but that is reasoning, not observation.
-- **Scaling beyond two machines**, and repeated scale up/down cycles.
+| Not yet exercised | |
+| --- | --- |
+| Provider restart with machines in flight | the token is persisted in Omni state and the datasource re-registered on every reconcile, so this should work by construction — but that is reasoning, not observation |
+| `image_format: raw` | implemented and unit-tested; every live run has used `qcow2` |
+| Manual `image` override | implemented, never run against a hand-pinned virtual image |
+| Non-administrator Morpheus account | the permissions in [Installation](installation.md) are reasoned from the API calls the provider makes, not confirmed by running as such a user |
+| More than one cloud, resource pool, or provider instance | supported by the schema, never run |
 
 ## Known-uncertain areas
 
