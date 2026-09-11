@@ -14,4 +14,10 @@ message MachineSpec {
   // instance_id is the Morpheus instance ID, resolved once and then reused so
   // deprovisioning does not depend on the instance still being findable by name.
   string instance_id = 5;
+  // config_token addresses this machine's entry on the provider's NoCloud
+  // server. It is minted before the instance is created, because it is baked
+  // into the VM's SMBIOS serial and cannot be changed afterwards, and it is
+  // kept here so a restarted provider re-registers the same machine under the
+  // token its VM is already asking for.
+  string config_token = 6;
 }

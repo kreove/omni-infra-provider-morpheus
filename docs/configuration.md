@@ -17,6 +17,8 @@ The provider is configured with environment variables or the equivalent flags. F
 | | `--provider-name` | no | `Morpheus` | Display name in Omni |
 | | `--provider-description` | no | | Description shown in Omni |
 | | `--insecure-skip-verify` | no | `false` | Skip Omni TLS verification |
+| `NOCLOUD_SERVER_URL` | `--nocloud-server-url` | in practice | | Base URL machines fetch their Talos config from |
+| `NOCLOUD_SERVER_BIND_ADDRESS` | `--nocloud-server-bind-address` | no | `:9080` | Address the NoCloud server listens on |
 
 > [!NOTE]
 > The provider has no Image Factory setting. Omni resolves the installation medium and hands the provider a URL, so the factory — including a self-hosted or authenticated one — is configured in Omni, not here.
@@ -26,6 +28,37 @@ Set either `MORPHEUS_TOKEN` or both `MORPHEUS_USERNAME` and `MORPHEUS_PASSWORD`.
 A username and password are exchanged for an OAuth access token at `/oauth/token`, which is cached and renewed automatically. If Morpheus later rejects the token — after an appliance restart, or when a session is revoked — the provider re-authenticates and retries the call once rather than failing until it is restarted.
 
 If you change the provider ID with `--id`, the Omni service account name must match it.
+
+## NoCloud server
+
+Morpheus does not deliver cloud-init user data to the guest — it renders its own `#cloud-config` and folds user data into that document's `runcmd` list, which Talos discards without an error. The provider therefore serves the Talos config itself over HTTP and points each VM at it through the guest's SMBIOS serial number. [Compatibility](compatibility.md#1-cloud-init-user-data-passthrough-confirmed-broken-worked-around) has the detail.
+
+`NOCLOUD_SERVER_URL` is marked "in practice" rather than "yes" because the provider still sends `config.userData`, so an appliance that passes user data through untouched would work without it. No such appliance has been observed; assume it is required.
+
+Two things matter:
+
+- **The URL must be reachable from the machines**, not from the operator or from Omni. Provisioned VMs connect to it directly, on the network the Machine Class puts them on. It is the provider host's address on that network — never `localhost`, and never a name only resolvable elsewhere.
+- **The port must be open to the VM network.** The deployment examples publish `9080`; a Kubernetes deployment needs a Service reachable from outside the cluster, since the VMs are not in it.
+
+To verify from a machine on the VM network:
+
+```bash
+curl -v http://provider-host:9080/nocloud/test/user-data
+```
+
+A `503` is the correct answer — the token is unknown. Anything that times out or is refused means machines will not get their config.
+
+The URL is not baked into the Talos image, so changing it does not invalidate the image cache. It is recorded per VM at creation, so a change only affects machines provisioned afterwards.
+
+### What it serves
+
+Each machine gets a random token, minted before its VM is created and stored in the provider's Omni state. The token addresses that machine's datasource:
+
+```
+http://provider-host:9080/nocloud/<token>/user-data
+```
+
+The token is the only thing guarding the join config, which carries a credential for registering a machine with Omni. It is visible in the VM's SMBIOS and in the Morpheus instance's QEMU arguments, so treat access to the VM network accordingly. The server serves only these three files and has no other endpoints.
 
 ## Machine Class provider data
 

@@ -96,20 +96,35 @@ Common causes: no capacity in the resource pool, a network the layout cannot att
 
 ### Nodes boot but never join Omni
 
-The VM is running in Morpheus but never appears in Omni. This is almost always the join config not reaching Talos — see [Compatibility](compatibility.md#1-cloud-init-user-data-passthrough), which explains why this is the most likely failure mode of this port.
+The VM is running in Morpheus, the console shows Talos healthy in `Maintenance` stage, and the node never appears in Omni. The console banner shows `SIDEROLINK: n/a`.
 
-To confirm, compare what Morpheus rendered against what Omni supplied:
+This means Talos never received a machine config. The usual cause is that the machine is not reaching the provider's NoCloud server — the mechanism that exists precisely because Morpheus does not deliver user data to the guest (see [Compatibility](compatibility.md#1-cloud-init-user-data-passthrough-confirmed-broken-worked-around)).
 
-```bash
-curl -sk -H "Authorization: Bearer $MORPHEUS_TOKEN" \
-  "$MORPHEUS_ENDPOINT/api/instances/<id>" | jq -r '.instance.config.userData'
-```
+Note that the logs are unhelpful here by design: Talos reports `found config disk (cidata)` and `fetching machine config from: cidata/user-data` and then silently discards what it read, because Morpheus's file starts with `#cloud-config`. **The absence of an error is expected and is not evidence that config delivery worked.**
 
-That must be **byte-identical** to the Omni join config. If Morpheus has wrapped it in `#cloud-config`, appended a `users:` block, or added an agent-install script, Talos will have failed to parse it.
+Check, in order:
 
-If it has, verify that `createUser` and `noAgent` took effect on the instance, and check whether a **provisioning policy** or the **cloud's agent install mode** is re-enabling guest customization at the appliance level — those override what the request asks for. Setting the cloud's agent install mode away from `cloudInit` is the usual fix.
+1. **Is the NoCloud server configured at all?** The provider logs a warning at startup if `NOCLOUD_SERVER_URL` is unset. Without it, no machine can ever get a config.
 
-Open the VM console in Morpheus to see what Talos itself reports. A node that read a corrupt config says so on the console.
+2. **Did the machine fetch its config?** The provider logs `served Talos machine config` with the hostname, once per machine. If that line never appears, the machine could not reach the server. The provisioning step stays at `waiting for the machine to fetch its Talos config` in Omni for ten minutes before giving up with a warning naming the URL.
+
+3. **Can machines reach the URL?** `NOCLOUD_SERVER_URL` must be reachable *from the VM network*, which is usually not the same network the provider runs on. From a VM on that network:
+
+   ```bash
+   curl -v http://provider-host:9080/nocloud/test/user-data
+   ```
+
+   A `503` proves reachability (the token is unknown, which is the expected answer). A timeout or refusal is the problem. Note Talos only retries for **three minutes** before giving up until the next boot.
+
+4. **Did the SMBIOS serial reach the guest?** On the hypervisor:
+
+   ```bash
+   virsh dumpxml <domain> | grep -A8 "qemu:commandline"
+   ```
+
+   It should contain `-smbios type=1,serial=ds=nocloud-net;s=http://...`. If it does not, Morpheus dropped `config.qemuArgs` — check for a provisioning policy restricting it. Inside a guest that has a shell, `dmidecode -s system-serial-number` shows what Talos actually sees; a bare UUID there means the override did not take.
+
+If a machine missed its three-minute window — for example because the provider was restarted while it was booting — rebooting the VM makes it ask again.
 
 ### The console is blank
 

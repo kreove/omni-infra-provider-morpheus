@@ -11,10 +11,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/siderolabs/omni/client/pkg/client"
@@ -26,6 +29,7 @@ import (
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider"
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/data"
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/meta"
+	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/nocloud"
 )
 
 //go:embed data/icon.svg
@@ -46,6 +50,8 @@ var cfg struct {
 	morpheusPassword       string
 	morpheusInsecure       bool
 	omniInsecureSkipVerify bool
+	nocloudBindAddress     string
+	nocloudURL             string
 }
 
 var rootCmd = &cobra.Command{
@@ -89,7 +95,30 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		provisioner := provider.NewProvisioner(morpheusClient)
+		var nocloudServer *nocloud.Server
+
+		if cfg.nocloudURL != "" {
+			if err = nocloud.ValidateBaseURL(cfg.nocloudURL); err != nil {
+				return err
+			}
+
+			nocloudServer = nocloud.NewServer(logger)
+
+			shutdown, err := startNoCloudServer(cmd.Context(), logger, nocloudServer)
+			if err != nil {
+				return err
+			}
+
+			defer shutdown()
+		} else {
+			logger.Warn(
+				"no NoCloud server URL configured; the join config will be handed to Morpheus as user data, " +
+					"which most appliances rewrite into their own cloud-config and Talos then ignores. " +
+					"Set --nocloud-server-url unless this appliance is known to pass user data through untouched.",
+			)
+		}
+
+		provisioner := provider.NewProvisioner(morpheusClient, nocloudServer, cfg.nocloudURL)
 
 		infrastructureProvider, err := infra.NewProvider(
 			meta.ProviderID,
@@ -129,6 +158,45 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// startNoCloudServer starts serving Talos NoCloud datasources and returns a
+// function that stops it.
+//
+// The listener is opened before returning so that an address already in use
+// fails the provider at startup, rather than leaving it running and every
+// machine it provisions stuck waiting for a config it can never fetch.
+func startNoCloudServer(ctx context.Context, logger *zap.Logger, server *nocloud.Server) (func(), error) {
+	listener, err := net.Listen("tcp", cfg.nocloudBindAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %q for the NoCloud server: %w", cfg.nocloudBindAddress, err)
+	}
+
+	httpServer := &http.Server{
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		if serveErr := httpServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			logger.Error("NoCloud server stopped", zap.Error(serveErr))
+		}
+	}()
+
+	logger.Info(
+		"serving Talos NoCloud datasources",
+		zap.String("bind_address", listener.Addr().String()),
+		zap.String("url", cfg.nocloudURL),
+	)
+
+	return func() {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		if shutdownErr := httpServer.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Error("failed to stop the NoCloud server", zap.Error(shutdownErr))
+		}
+	}, nil
+}
+
 func main() {
 	if err := app(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -160,6 +228,8 @@ func normalizeConfig() {
 	cfg.morpheusEndpoint = strings.TrimSpace(cfg.morpheusEndpoint)
 	cfg.morpheusToken = strings.TrimSpace(cfg.morpheusToken)
 	cfg.morpheusUsername = strings.TrimSpace(cfg.morpheusUsername)
+	cfg.nocloudBindAddress = strings.TrimSpace(cfg.nocloudBindAddress)
+	cfg.nocloudURL = strings.TrimSpace(cfg.nocloudURL)
 }
 
 func stripWhitespace(value string) string {
@@ -312,5 +382,18 @@ func init() {
 		"insecure-skip-verify",
 		false,
 		"skip Omni TLS verification",
+	)
+	rootCmd.Flags().StringVar(
+		&cfg.nocloudBindAddress,
+		"nocloud-server-bind-address",
+		firstNonEmpty(os.Getenv("NOCLOUD_SERVER_BIND_ADDRESS"), ":9080"),
+		"address the NoCloud datasource server listens on (defaults to NOCLOUD_SERVER_BIND_ADDRESS, then :9080)",
+	)
+	rootCmd.Flags().StringVar(
+		&cfg.nocloudURL,
+		"nocloud-server-url",
+		os.Getenv("NOCLOUD_SERVER_URL"),
+		"base URL provisioned machines fetch their Talos config from, e.g. http://10.0.0.5:9080 -- "+
+			"must be reachable from the machines' network (defaults to NOCLOUD_SERVER_URL)",
 	)
 }

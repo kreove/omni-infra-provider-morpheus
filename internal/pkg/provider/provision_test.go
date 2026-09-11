@@ -32,7 +32,7 @@ func buildTestPayload(t *testing.T, mutate func(*data.Data)) map[string]any {
 		mutate(&providerData)
 	}
 
-	return buildInstancePayload("talos-cp-1", testJoinConfig, 42, testTarget(), providerData)
+	return buildInstancePayload("talos-cp-1", testJoinConfig, "", 42, testTarget(), providerData)
 }
 
 func subMap(t *testing.T, payload map[string]any, key string) map[string]any {
@@ -106,6 +106,34 @@ func TestBuildInstancePayloadDisablesGuestCustomization(t *testing.T) {
 	}
 }
 
+// Morpheus does not pass user data through to the guest: it renders its own
+// cloud-config and folds config.userData into that document's runcmd list,
+// which Talos discards. Pointing the guest's SMBIOS serial at the provider's
+// NoCloud server is what actually delivers the config, so the QEMU argument
+// carrying it has to survive into the payload intact -- semicolon included.
+func TestBuildInstancePayloadCarriesNoCloudSerial(t *testing.T) {
+	serial := "ds=nocloud-net;s=http://10.0.0.5:9080/nocloud/deadbeef/"
+
+	payload := buildInstancePayload("talos-cp-1", testJoinConfig, serial, 42, testTarget(), validData())
+
+	qemuArgs, ok := subMap(t, payload, "config")["qemuArgs"].(string)
+	if !ok {
+		t.Fatalf("config.qemuArgs is missing")
+	}
+
+	if qemuArgs != "-smbios type=1,serial="+serial {
+		t.Errorf("qemuArgs = %q", qemuArgs)
+	}
+}
+
+// Without a NoCloud server the guest keeps whatever serial Morpheus assigns,
+// and no QEMU override may be sent: an empty serial= would blank the field.
+func TestBuildInstancePayloadOmitsQemuArgsWithoutNoCloud(t *testing.T) {
+	if _, ok := subMap(t, buildTestPayload(t, nil), "config")["qemuArgs"]; ok {
+		t.Error("config.qemuArgs is set without a NoCloud serial")
+	}
+}
+
 func TestBuildInstancePayloadTargetsMVM(t *testing.T) {
 	config := subMap(t, buildTestPayload(t, nil), "config")
 
@@ -132,7 +160,7 @@ func TestBuildInstancePayloadIncludesResourcePool(t *testing.T) {
 	resolved := testTarget()
 	resolved.resourcePool = NamedObject{ID: 11, Name: "Pool"}
 
-	payload := buildInstancePayload("talos-cp-1", testJoinConfig, 42, resolved, validData())
+	payload := buildInstancePayload("talos-cp-1", testJoinConfig, "", 42, resolved, validData())
 
 	if config := subMap(t, payload, "config"); config["resourcePoolId"] != 11 {
 		t.Errorf("resourcePoolId = %v, want 11", config["resourcePoolId"])

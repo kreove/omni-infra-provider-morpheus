@@ -5,6 +5,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # Provisioned machines fetch their Talos config from the provider, so this
+    # port has to be reachable from the network the VMs are built on. The
+    # address machines use is NOCLOUD_SERVER_URL.
+    ports:
+      - "9080:9080"
     # The provider streams Talos images through its own filesystem on the way
     # into Morpheus. A raw image needs a couple of gigabytes of scratch space;
     # qcow2 needs far less.

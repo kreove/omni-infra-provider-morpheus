@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/data"
+	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/nocloud"
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/resources"
 )
 
@@ -30,17 +32,44 @@ const (
 	// newVolumeID is the sentinel Morpheus expects for a volume it should
 	// create rather than reuse.
 	newVolumeID = -1
+
+	// configFetchGracePeriod is how long provisioning waits for a machine to
+	// collect its config from the NoCloud server before giving up on seeing it
+	// happen.
+	//
+	// Waiting at all is what keeps Omni reconciling the request, which is what
+	// re-registers the machine after a provider restart. The wait is bounded
+	// because a machine that already joined Omni on an earlier boot will never
+	// ask again, and that must not hold its request open forever.
+	configFetchGracePeriod = 10 * time.Minute
 )
 
 // Provisioner provisions Talos VMs on Morpheus.
 type Provisioner struct {
-	client      *Client
-	imageBuilds sync.Map
+	client         *Client
+	nocloudServer  *nocloud.Server
+	nocloudBaseURL string
+	imageBuilds    sync.Map
 }
 
 // NewProvisioner creates a Morpheus provisioner.
-func NewProvisioner(client *Client) *Provisioner {
-	return &Provisioner{client: client}
+//
+// The NoCloud server and its base URL are optional, and when either is unset
+// the provider falls back to handing the join config to Morpheus as
+// config.userData. That only works on an appliance that passes user data
+// through untouched; see docs/compatibility.md.
+func NewProvisioner(client *Client, nocloudServer *nocloud.Server, nocloudBaseURL string) *Provisioner {
+	return &Provisioner{
+		client:         client,
+		nocloudServer:  nocloudServer,
+		nocloudBaseURL: nocloudBaseURL,
+	}
+}
+
+// nocloudEnabled reports whether machines are pointed at this provider's
+// NoCloud server instead of the config drive Morpheus writes.
+func (p *Provisioner) nocloudEnabled() bool {
+	return p.nocloudServer != nil && p.nocloudBaseURL != ""
 }
 
 // ProvisionSteps implements infra.Provisioner.
@@ -96,6 +125,15 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 
 			return nil
 		}),
+		// Publishing the datasource is its own step so that the token reaches
+		// Omni's state before any VM exists. The token is baked into the VM's
+		// SMBIOS serial at creation and cannot be changed afterwards, so a
+		// token that was minted but not recorded would strand the machine it
+		// was minted for. Each step's state changes are committed before the
+		// next one runs, which createInstance relies on.
+		provision.NewStep("publishConfig", func(_ context.Context, _ *zap.Logger, pctx provision.Context[*resources.Machine]) error {
+			return p.publishMachineConfig(pctx)
+		}),
 		provision.NewStep("syncMachine", func(ctx context.Context, logger *zap.Logger, pctx provision.Context[*resources.Machine]) error {
 			providerData, err := unmarshalProviderData(pctx)
 			if err != nil {
@@ -105,6 +143,45 @@ func (p *Provisioner) ProvisionSteps() []provision.Step[*resources.Machine] {
 			return p.syncMachine(ctx, logger, pctx, providerData)
 		}),
 	}
+}
+
+// publishMachineConfig mints this machine's NoCloud token if it does not have
+// one yet, and publishes its datasource.
+//
+// Republishing on every reconcile is deliberate: the registry is in memory, so
+// a provider that restarted while a machine was still booting has to put the
+// entry back before that machine gives up asking for it.
+func (p *Provisioner) publishMachineConfig(pctx provision.Context[*resources.Machine]) error {
+	if !p.nocloudEnabled() {
+		return nil
+	}
+
+	joinConfig := pctx.ConnectionParams.JoinConfig
+	if joinConfig == "" {
+		return fmt.Errorf("Omni supplied an empty join config for machine %q", pctx.GetRequestID())
+	}
+
+	state := pctx.State.TypedSpec().Value
+
+	if state.ConfigToken == "" {
+		token, err := nocloud.NewToken()
+		if err != nil {
+			return err
+		}
+
+		state.ConfigToken = token
+	}
+
+	p.nocloudServer.Register(state.ConfigToken, nocloud.Machine{
+		JoinConfig: joinConfig,
+		// Morpheus lowercases the guest hostname it derives from the instance
+		// name, and a Talos hostname has to be a valid DNS label regardless, so
+		// the request ID is lowercased here rather than passed through as Omni
+		// spells it.
+		Hostname: strings.ToLower(pctx.GetRequestID()),
+	})
+
+	return nil
 }
 
 func (p *Provisioner) syncMachine(
@@ -148,6 +225,10 @@ func (p *Provisioner) syncMachine(
 
 	switch instance.Status {
 	case instanceStatusRunning:
+		if retry := p.awaitConfigFetch(logger, pctx.State.TypedSpec().Value.ConfigToken, instance); retry != nil {
+			return retry
+		}
+
 		logger.Info(
 			"machine is running",
 			zap.String("name", instance.Name),
@@ -183,6 +264,48 @@ func (p *Provisioner) syncMachine(
 	}
 }
 
+// awaitConfigFetch holds the request open until the machine has collected its
+// Talos config, or until the grace period runs out.
+//
+// A running VM is not a provisioned machine: Morpheus reports "running" as soon
+// as the VM is powered on, long before Talos has read its config. Reporting
+// success at that point would hide the failure this whole mechanism exists to
+// avoid -- a machine that boots perfectly and then sits in maintenance mode
+// because it never got a config.
+func (p *Provisioner) awaitConfigFetch(logger *zap.Logger, token string, instance *Instance) error {
+	if !p.nocloudEnabled() || token == "" {
+		return nil
+	}
+
+	status, ok := p.nocloudServer.Status(token)
+	if !ok || !status.ServedAt.IsZero() {
+		return nil
+	}
+
+	if time.Since(status.RegisteredAt) < configFetchGracePeriod {
+		logger.Info(
+			"waiting for the machine to fetch its Talos config",
+			zap.String("name", instance.Name),
+			zap.Int("id", instance.ID),
+		)
+
+		return provision.NewRetryInterval(15 * time.Second)
+	}
+
+	// Not an error: a machine that joined Omni on an earlier boot never asks
+	// again, and this provider process may simply not have been the one that
+	// served it.
+	logger.Warn(
+		"machine never fetched its Talos config from this provider; "+
+			"if it is not in Omni, check that the machine can reach the NoCloud server URL",
+		zap.String("name", instance.Name),
+		zap.Int("id", instance.ID),
+		zap.String("nocloud_url", nocloud.MachineURL(p.nocloudBaseURL, token)),
+	)
+
+	return nil
+}
+
 func (p *Provisioner) createInstance(
 	ctx context.Context,
 	pctx provision.Context[*resources.Machine],
@@ -205,7 +328,18 @@ func (p *Provisioner) createInstance(
 		return nil, fmt.Errorf("Omni supplied an empty join config for instance %q", name)
 	}
 
-	payload := buildInstancePayload(name, joinConfig, imageID, resolved, providerData)
+	var nocloudSerial string
+
+	if p.nocloudEnabled() {
+		token := pctx.State.TypedSpec().Value.ConfigToken
+		if token == "" {
+			return nil, fmt.Errorf("machine %q has no NoCloud config token", name)
+		}
+
+		nocloudSerial = nocloud.SMBIOSSerial(p.nocloudBaseURL, token)
+	}
+
+	payload := buildInstancePayload(name, joinConfig, nocloudSerial, imageID, resolved, providerData)
 
 	created, err := p.client.CreateInstance(ctx, payload)
 	if err != nil {
@@ -216,8 +350,12 @@ func (p *Provisioner) createInstance(
 }
 
 // buildInstancePayload renders the Morpheus provisioning request for a machine.
+//
+// nocloudSerial, when set, is the SMBIOS system serial number that sends the
+// guest to this provider's NoCloud server instead of the config drive Morpheus
+// writes.
 func buildInstancePayload(
-	name, joinConfig string,
+	name, joinConfig, nocloudSerial string,
 	imageID int,
 	resolved *target,
 	providerData data.Data,
@@ -240,6 +378,14 @@ func buildInstancePayload(
 
 	if resolved.resourcePool.ID > 0 {
 		config["resourcePoolId"] = resolved.resourcePool.ID
+	}
+
+	if nocloudSerial != "" {
+		// libvirt already emits -smbios type=1 from the domain's <sysinfo>,
+		// where Morpheus sets the serial to the VM's UUID. A later -smbios
+		// option overrides the fields it names, so this replaces the serial and
+		// leaves the rest of the table alone.
+		config["qemuArgs"] = "-smbios type=1,serial=" + nocloudSerial
 	}
 
 	instance := map[string]any{
@@ -360,6 +506,10 @@ func (p *Provisioner) Deprovision(
 	state *resources.Machine,
 	machineRequest *infra.MachineRequest,
 ) error {
+	if p.nocloudEnabled() && state != nil && state.TypedSpec().Value.ConfigToken != "" {
+		p.nocloudServer.Forget(state.TypedSpec().Value.ConfigToken)
+	}
+
 	instance, err := p.resolveInstanceForRemoval(ctx, state, machineRequest.Metadata().ID())
 	if err != nil {
 		return err

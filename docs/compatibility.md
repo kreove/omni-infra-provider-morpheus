@@ -2,7 +2,7 @@
 
 ## Status
 
-This provider is **alpha and unvalidated against a live Morpheus appliance**. The VergeOS and Xen Orchestra providers it was ported from were both exercised end-to-end against real infrastructure before release. This one has not been.
+This provider is **alpha**. It has now been exercised against a live Morpheus appliance (MVM on KVM with Ceph-backed storage), which turned up one genuine incompatibility — cloud-init user data is not passed to the guest, see below — that the provider now works around. Areas other than provisioning and config delivery remain lightly exercised.
 
 What it *is* built on:
 
@@ -17,20 +17,49 @@ Everything the provider sends is unit-tested for shape. None of it has been ackn
 
 These are the places most likely to need adjustment on first contact, roughly in order of risk.
 
-### 1. Cloud-init user data passthrough
+### 1. Cloud-init user data passthrough — confirmed broken, worked around
 
-**This is the highest-risk part of the port.**
+**This was the highest-risk part of the port, and it turned out to be real.** It has since been reproduced against a live appliance and worked around; what follows is what actually happens, because it explains why the provider does something unusual.
 
-Talos does not consume cloud-config YAML. Its NoCloud datasource reads user-data and expects a Talos machine configuration — here, the join config Omni supplies. Anything Morpheus adds to, merges into, or reformats in that user-data is read by Talos as part of its machine config, and the node fails to join.
+Morpheus does **not** pass `config.userData` to the guest. It renders its own `#cloud-config` document and folds whatever the API supplied into that document's `runcmd` list, one YAML line per list entry:
 
-The provider sends the join config as `config.userData`, which the API reference documents as *"allows for override of cloud-init based user-data yaml or custom scripts"*, and disables the two features known to rewrite user data:
+```yaml
+#cloud-config
+hostname: cluster-05-...
+users:
+- name: sysadmin
+  ...
+runcmd:
+- 'apiVersion: v1alpha1'
+- 'kind: SideroLinkConfig'
+- 'apiUrl: https://omni.example.com:8090/?jointoken=...'
+- '---'
+...
+```
 
-- `createUser: false` — Morpheus otherwise injects a login user into cloud-init. Talos has no user accounts.
-- `noAgent: true` — the Morpheus agent is a package installed into the guest. Talos has no package manager and no shell.
+Talos then discards the file, because its NoCloud platform explicitly refuses cloud-config:
 
-If nodes boot but sit in maintenance mode without joining, this is the first thing to check: pull the instance's rendered cloud-init user data from Morpheus and confirm it is byte-identical to the join config. See [Troubleshooting](troubleshooting.md#nodes-boot-but-never-join-omni).
+```go
+case bytes.Equal(firstLine, []byte("#cloud-config")):
+	// ignore cloud-config, Talos does not support it
+	return nil, errors.ErrNoConfigSource
+```
 
-The Xen Orchestra provider hit exactly this class of problem — XO built a config drive whose *contents* were correct but whose *layout* Talos could not detect — and had to build the drive itself. If Morpheus turns out to mangle user data in a way that cannot be disabled, the equivalent fix here is heavier: Morpheus owns config-drive generation, so there is no obvious injection point.
+This is returned as *"no config source"* rather than an error, so **nothing is logged**: the machine reports that it found the config disk and fetched `user-data`, then boots into maintenance mode with no SideroLink interface and no explanation.
+
+`createUser: false` and `noAgent: true` are both **ignored** on an appliance whose cloud has its agent install mode set to `cloudInit` — the rendered document still contains a login user and a Morpheus agent callback. The API echoes `config.userData` back verbatim when queried, which makes this look like it worked; only the config drive on the hypervisor shows otherwise.
+
+**The workaround.** Talos's NoCloud platform also accepts its datasource over HTTP, selected by options in the guest's SMBIOS system serial number:
+
+```
+ds=nocloud-net;s=http://provider:9080/nocloud/<token>/
+```
+
+The provider serves the datasource itself and sets that serial per VM through `config.qemuArgs`, which Morpheus passes into the libvirt domain verbatim. A later `-smbios type=1,serial=` overrides the UUID-derived serial libvirt emits from `<sysinfo>`. The machine then fetches its config from the provider and never reads the mangled config drive at all.
+
+Because the serial is a per-VM setting rather than an image property, the schematic is unchanged and the image cache still works — every machine boots the same cached image. See [Configuration](configuration.md#nocloud-server) for the settings this requires.
+
+`config.userData` is still sent, so an appliance that genuinely passes user data through untouched keeps working without the NoCloud server. No such appliance has been observed.
 
 ### 2. Layout selection
 

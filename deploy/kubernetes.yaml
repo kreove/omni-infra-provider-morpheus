@@ -14,6 +14,27 @@ stringData:
   OMNI_SERVICE_ACCOUNT_KEY: ""
   MORPHEUS_ENDPOINT: https://morpheus.example.com
   MORPHEUS_TOKEN: ""
+  # Where provisioned machines fetch their Talos config from. It must be an
+  # address reachable from the network the VMs are built on -- the Service
+  # below is ClusterIP, which is only reachable from inside the cluster, so
+  # this normally needs a LoadBalancer or NodePort address instead.
+  NOCLOUD_SERVER_URL: http://provider.example.com:9080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omni-infra-provider-morpheus
+  namespace: omni-infra-provider-morpheus
+spec:
+  # Change to LoadBalancer or NodePort: provisioned VMs are outside the cluster
+  # and have to reach this to get their machine config.
+  type: ClusterIP
+  selector:
+    app: omni-infra-provider-morpheus
+  ports:
+    - name: nocloud
+      port: 9080
+      targetPort: nocloud
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -44,6 +65,9 @@ spec:
           envFrom:
             - secretRef:
                 name: omni-infra-provider-morpheus
+          ports:
+            - name: nocloud
+              containerPort: 9080
           volumeMounts:
             # Talos images are staged here on the way into Morpheus.
             - name: scratch

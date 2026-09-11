@@ -16,7 +16,7 @@ A community infrastructure provider that lets [Sidero Omni](https://docs.siderol
 - Omni-controlled system extensions and Talos versions
 - Optional use of an existing Morpheus virtual image (manual override)
 - Every Morpheus object addressable by name or by numeric ID
-- NoCloud join config delivery through Morpheus's cloud-init user data
+- Talos config delivered over HTTP from the provider, bypassing Morpheus's cloud-init templating
 - Docker Compose and Kubernetes deployment examples
 - API-token or username/password authentication to Morpheus
 
@@ -30,14 +30,15 @@ flowchart LR
     C -- Yes --> E[Provision instance from the cached image]
     D --> E
     E --> F[Attach NIC on the selected network]
-    F --> G[Morpheus writes the Omni join config as cloud-init user data]
+    F --> G[VM's SMBIOS serial points at the provider's NoCloud server]
     G --> H[Boot Talos VM]
-    H --> I[Machine connects to Omni]
+    H --> I[Talos fetches its join config from the provider over HTTP]
+    I --> J[Machine connects to Omni]
 ```
 
 Omni selects the Talos version and resolves the applicable system extensions into an Image Factory schematic. The provider converts that schematic into an image URL, downloads it, decompresses it when the requested format is compressed, and uploads it into Morpheus as a virtual image with a deterministic, content-derived name. Every later machine needing the same Talos version, architecture and schematic reuses that cached image.
 
-Each machine is then provisioned as a Morpheus instance from that image, with the Omni join config passed through as cloud-init user data.
+Each machine is then provisioned as a Morpheus instance from that image. The join config is **not** handed to Morpheus to deliver: Morpheus renders its own cloud-config and folds user data into that document's `runcmd` list, which Talos discards silently. Instead the provider serves the config itself, and sets the guest's SMBIOS serial to `ds=nocloud-net;s=<provider URL>` so Talos fetches it over HTTP. This is per VM, so every machine still boots the same cached image. See [Compatibility](docs/compatibility.md#1-cloud-init-user-data-passthrough-confirmed-broken-worked-around).
 
 When Omni no longer needs a machine, the provider powers the instance off and deletes it along with its volumes. Cached virtual images are retained for reuse.
 
@@ -50,6 +51,7 @@ When Omni no longer needs a machine, the provider powers the instance off and de
 - DNS and HTTPS access from the provider container to the configured Talos Image Factory
 - Scratch disk space in the provider container for staging images (a few hundred MB for qcow2, a few GB for raw)
 - Network access from provisioned Talos VMs to the Omni endpoints required by your deployment
+- Network access from provisioned Talos VMs to the provider itself, which serves them their Talos config (default port `9080`)
 - `amd64` virtualization hosts
 
 The provider currently supports `amd64` only.
@@ -76,7 +78,7 @@ Create a dedicated Morpheus user with permission to provision instances and mana
 cp deploy/example.env deploy/.env
 ```
 
-Fill in `OMNI_ENDPOINT`, `OMNI_SERVICE_ACCOUNT_KEY`, `MORPHEUS_ENDPOINT`, and either `MORPHEUS_TOKEN` or `MORPHEUS_USERNAME`/`MORPHEUS_PASSWORD`, then:
+Fill in `OMNI_ENDPOINT`, `OMNI_SERVICE_ACCOUNT_KEY`, `MORPHEUS_ENDPOINT`, either `MORPHEUS_TOKEN` or `MORPHEUS_USERNAME`/`MORPHEUS_PASSWORD`, and `NOCLOUD_SERVER_URL` — the address **provisioned machines** reach the provider on, which is where they fetch their Talos config. Then:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
