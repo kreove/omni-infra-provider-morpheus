@@ -11,11 +11,28 @@ What it *is* built on:
 - The [Morpheus API reference](https://apidocs.morpheusdata.com/reference/addinstance), for the `config` block and its per-cloud variants
 - The [Morpheus CLI](https://github.com/gomorpheus/morpheus-cli), for `servicePlanOptions` semantics and units
 
-Everything the provider sends is unit-tested for shape. None of it has been acknowledged by a real appliance.
+Everything the provider sends is unit-tested for shape, and the paths listed below have now been acknowledged by a real appliance.
+
+## What has been exercised
+
+Confirmed end to end on Morpheus with an MVM cloud, provisioning Talos v1.13.10:
+
+- Machine Class validation and every object lookup — cloud, group, layout, plan, network, resource pool, datastore
+- Talos Image Factory download, virtual image creation, upload and conversion
+- Image cache reuse: the second machine provisioned from the cached image rather than re-importing
+- Instance creation on MVM, including the SMBIOS serial that points a guest at the NoCloud server
+- Config delivery over HTTP, SideroLink registration, and Kubernetes coming up
+- A two-machine cluster — one control plane, one worker — reaching `Running` in Omni
+
+Still unexercised, and the places to be careful:
+
+- **Deprovisioning and scale-down.** The instance is deleted with `removeVolumes=true&force=true` and the NoCloud entry dropped; neither has been observed against a real instance.
+- **Provider restart while a machine is booting.** The token is persisted in Omni state and the datasource re-registered on every reconcile, so this should work by construction — but that is reasoning, not observation.
+- **Scaling beyond two machines**, and repeated scale up/down cycles.
 
 ## Known-uncertain areas
 
-These are the places most likely to need adjustment on first contact, roughly in order of risk.
+These are the places most likely to need adjustment, roughly in order of risk. Several have now been settled by a live run and are kept because the reasoning still matters.
 
 ### 1. Cloud-init user data passthrough (confirmed broken, worked around)
 
@@ -61,13 +78,13 @@ Because the serial is a per-VM setting rather than an image property, the schema
 
 `config.userData` is still sent, so an appliance that genuinely passes user data through untouched keeps working without the NoCloud server. No such appliance has been observed.
 
-### 2. Layout selection
+### 2. Layout selection (settled)
 
 The layout is the only thing you must name, and it is authoritative: it selects the hypervisor and reports the instance type the provider provisions from.
 
 Nothing is defaulted here. An earlier version defaulted `instance_type_code` to `vm` on the assumption that Morpheus ships a generic "plain VM" type; that was never verified, and HPE's own MVM example pairs *Ubuntu* with *Single KVM VM* instead. Reading the instance type off the layout removed the need to assume anything.
 
-What remains uncertain is only which layouts your appliance actually offers, and whether the MVM one is usable for a Talos image. A wrong or missing layout fails at `ensureTarget` with every candidate listed.
+A live appliance confirmed the shape: its MVM layout is named `Single HVM` and sits under a stock instance type, and provisioning a Talos qcow2 from it works. Layout names are appliance-specific, which is why none of this is defaulted. A wrong or missing layout fails at `ensureTarget` with every candidate listed.
 
 ### 3. Sizing overrides
 
@@ -75,19 +92,21 @@ What remains uncertain is only which layouts your appliance actually offers, and
 
 Memory is stated in MiB in the Machine Class and converted to bytes, which is what Morpheus expects in this field.
 
-### 4. OS type on imported images
+### 4. OS type on imported images (settled)
 
 `os_type` is unset by default and the field is then omitted, because Morpheus does not require it on a virtual image and the agent behaviour it drives is disabled here anyway.
 
 Set it and the provider resolves the name or code against `/api/library/operating-systems/os-types` and sends the resulting **id**. It must be a reference: a nested `{"code": ...}` makes Morpheus bind the object as a *new* OS type and validate it as one, failing with `code must be unique; name is required; platform is required` — the code being already taken by the entry that was meant to be selected.
 
-### 5. Image readiness
+### 5. Image readiness (settled)
 
-After upload, Morpheus processes an image asynchronously. The provider polls the virtual image until it reports an active status. Morpheus spells that status differently across versions and cloud types, and some versions leave it empty on a completed upload — so a non-empty size is accepted as evidence on its own. If imports hang at "waiting", check what your appliance actually reports in `status`.
+After upload, Morpheus processes an image asynchronously. The provider polls the virtual image until it reports an active status. Morpheus spells that status differently across versions and cloud types, and some versions leave it empty on a completed upload — so a non-empty size is accepted as evidence on its own.
 
-### 6. Boot firmware
+An import and a later cache hit have both been observed working. The tolerance is kept because it is what makes the check version-independent; if imports hang at "waiting" on your appliance, check what it reports in `status`.
 
-The Talos nocloud image boots under both BIOS and UEFI, so `uefi` is left unset by default and the platform default applies. If VMs power on and immediately halt without console output, set `uefi: true` (or `false`) explicitly.
+### 6. Boot firmware (settled)
+
+The Talos nocloud image boots under both BIOS and UEFI, so `uefi` is left unset by default and the platform default applies. A machine has booted and joined under the MVM default with `uefi` unset. If VMs power on and immediately halt without console output, set `uefi: true` (or `false`) explicitly.
 
 ## Supported
 
@@ -98,6 +117,7 @@ The Talos nocloud image boots under both BIOS and UEFI, so `uefi` is left unset 
 | Image formats | `qcow2` (default), `raw` |
 | Authentication | API token, or username and password |
 | Provider replicas | One |
+| Verified against | Morpheus with an MVM cloud, Talos v1.13.10, two-machine cluster |
 
 ## Not supported
 

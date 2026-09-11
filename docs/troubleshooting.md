@@ -128,7 +128,7 @@ If a machine missed its three-minute window — for example because the provider
 
 ### The console is blank
 
-The provider requests `console=ttyS0,38400n8 console=tty0` as kernel arguments, with `tty0` last so it owns `/dev/console`. If the layout gives the guest no serial port and `tty0` were absent, every message after early boot would go to a device that does not exist. If the console is blank anyway, check the VM actually powered on rather than halting immediately — see the firmware note in [Compatibility](compatibility.md#5-boot-firmware).
+The provider requests `console=ttyS0,38400n8 console=tty0` as kernel arguments, with `tty0` last so it owns `/dev/console`. If the layout gives the guest no serial port and `tty0` were absent, every message after early boot would go to a device that does not exist. If the console is blank anyway, check the VM actually powered on rather than halting immediately — see the firmware note in [Compatibility](compatibility.md#6-boot-firmware-settled).
 
 ## Deprovisioning problems
 
