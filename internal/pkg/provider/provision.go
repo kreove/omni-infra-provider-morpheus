@@ -363,17 +363,32 @@ func buildInstancePayload(
 	config := map[string]any{
 		"imageId":          imageID,
 		"poolProviderType": mvmProviderType,
-		// Talos has no user accounts, no shell and no SSH server. Letting
-		// Morpheus inject a login user rewrites the cloud-init user-data that
-		// carries the join config, and the agent install can only fail against
-		// a guest it cannot log into.
+		// Talos has no user accounts, no shell and no SSH server, so a login
+		// user is useless and the agent cannot install against a guest it
+		// cannot log into. Neither of these stops Morpheus rewriting the
+		// config drive -- on a cloud whose agent install mode is cloudInit the
+		// rendered document still gets a user and an agent callback -- so they
+		// are sent as the correct request, not as a mitigation. What actually
+		// delivers the config is the NoCloud server; see nocloudSerial below.
 		"createUser": false,
 		"noAgent":    true,
-		// The Talos machine configuration, delivered verbatim through the
-		// NoCloud datasource. This is not cloud-config YAML: Talos parses
-		// user-data itself, so anything Morpheus adds to it is read as part of
-		// the machine config and breaks the join.
-		"userData": joinConfig,
+	}
+
+	// Sent only when the machine is not being pointed at the NoCloud server.
+	//
+	// Morpheus does not pass this to the guest: it renders its own
+	// #cloud-config and folds this value into that document's runcmd list,
+	// which Talos discards wholesale, returning ErrNoConfigSource for anything
+	// beginning with #cloud-config. So on a machine using the NoCloud server
+	// it delivers nothing -- while still writing the join config, and the join
+	// token in it, onto a config drive readable by anyone with access to the
+	// instance in Morpheus.
+	//
+	// It is kept for the case where no NoCloud server is configured, so an
+	// appliance that genuinely passes user data through untouched still works.
+	// No such appliance has been observed.
+	if nocloudSerial == "" {
+		config["userData"] = joinConfig
 	}
 
 	if resolved.resourcePool.ID > 0 {

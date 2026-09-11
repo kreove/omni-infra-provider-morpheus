@@ -48,6 +48,25 @@ Operators should:
 
 The provider downloads images itself rather than having Morpheus fetch them, so the provider host needs outbound HTTPS access to the Image Factory — factor this into your network segmentation.
 
+## NoCloud config server
+
+The provider listens on an HTTP port and serves each machine its Talos configuration. This exists because Morpheus does not deliver cloud-init user data to the guest; see [Compatibility](docs/compatibility.md#1-cloud-init-user-data-passthrough-confirmed-broken-worked-around).
+
+**What is served is a credential.** The Talos machine configuration contains the join token a machine uses to register itself with Omni. Treat the endpoint as you would any credential distribution point.
+
+How it is protected, and how it is not:
+
+- Each machine's datasource is addressed by a **random 256-bit token**, minted per machine and never derived from the machine request ID. Knowing the token is the only authorization; there is no other authentication.
+- The token is **not a secret from the machine's environment**. It appears in the VM's SMBIOS serial, in the Morpheus instance's QEMU arguments, and therefore to anyone who can read that instance in Morpheus or run code in the guest.
+- **Plain HTTP means the config crosses the network in the clear.** Anyone able to observe traffic between a provisioned VM and the provider can read the join token. Put the endpoint on a network you trust for that, or terminate HTTPS in front of it and set `NOCLOUD_SERVER_URL` to the HTTPS address — the guest must trust the certificate.
+- The server exposes **only** `user-data`, `meta-data` and `network-config` under `/nocloud/<token>/`. It has no other endpoints and no write paths.
+- An unknown token is answered with `503`, not `404`, because Talos treats a 404 as a definitive "no config" and stops asking. This means the endpoint does not distinguish an unregistered machine from a wrong token, which is also the behaviour that avoids confirming whether a guessed token exists.
+- Entries live in memory only and are dropped when the machine is deprovisioned. A provider restart forgets them until the next reconcile republishes.
+
+Restrict the port to the network the provisioned VMs are on. It does not need to be reachable from operators, from Omni, or from the internet.
+
+The join config is **not** also handed to Morpheus when this server is in use. Sending it would write the join token onto a config drive readable by anyone with access to the instance, for no benefit: the guest reads its config over HTTP and ignores the drive.
+
 ## Least privilege
 
 Use a dedicated Morpheus API user scoped to the resources required by this provider: listing clouds, groups, networks, layouts and plans; creating and deleting instances; and creating, uploading and deleting virtual images. Avoid administrator credentials for long-running deployments.

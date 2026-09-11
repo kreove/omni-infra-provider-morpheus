@@ -6,6 +6,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kreove/omni-infra-provider-morpheus/internal/pkg/provider/data"
@@ -81,13 +82,40 @@ func TestBuildInstancePayloadTopLevel(t *testing.T) {
 	}
 }
 
-// The join config is the whole point of provisioning: without it Talos boots
-// into maintenance mode and never joins the cluster.
-func TestBuildInstancePayloadCarriesJoinConfig(t *testing.T) {
+// Without a NoCloud server the join config has nowhere else to go, so it is
+// still handed to Morpheus -- the fallback for an appliance that passes user
+// data through untouched.
+func TestBuildInstancePayloadCarriesJoinConfigWithoutNoCloud(t *testing.T) {
 	config := subMap(t, buildTestPayload(t, nil), "config")
 
 	if config["userData"] != testJoinConfig {
 		t.Errorf("userData = %q, want the join config verbatim", config["userData"])
+	}
+}
+
+// With a NoCloud server the guest reads its config over HTTP and never looks at
+// the config drive. Sending user data then delivers nothing, while writing the
+// join config -- and the join token in it -- onto a drive readable by anyone
+// with access to the instance in Morpheus.
+func TestBuildInstancePayloadOmitsJoinConfigWithNoCloud(t *testing.T) {
+	serial := "ds=nocloud-net;s=http://10.0.0.5:9080/nocloud/deadbeef/"
+
+	payload := buildInstancePayload("talos-cp-1", testJoinConfig, serial, 42, testTarget(), validData())
+	config := subMap(t, payload, "config")
+
+	if _, ok := config["userData"]; ok {
+		t.Errorf("userData is sent alongside a NoCloud serial: %v", config["userData"])
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to encode payload: %v", err)
+	}
+
+	// The whole payload, not just that one key: the join config must not reach
+	// Morpheus by any route once the NoCloud server is delivering it.
+	if strings.Contains(string(encoded), "/dev/vda") {
+		t.Error("the join config reaches Morpheus despite the NoCloud server")
 	}
 }
 
