@@ -17,7 +17,7 @@ Everything the provider sends is unit-tested for shape. None of it has been ackn
 
 These are the places most likely to need adjustment on first contact, roughly in order of risk.
 
-### 1. Cloud-init user data passthrough — confirmed broken, worked around
+### 1. Cloud-init user data passthrough (confirmed broken, worked around)
 
 **This was the highest-risk part of the port, and it turned out to be real.** It has since been reproduced against a live appliance and worked around; what follows is what actually happens, because it explains why the provider does something unusual.
 

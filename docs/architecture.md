@@ -77,4 +77,16 @@ Authentication is either a static API token or a username and password exchanged
 
 ## Talos delivery
 
-Talos reads its machine configuration from the NoCloud datasource. The provider passes the Omni join config through as `config.userData` and disables the Morpheus features that would rewrite it — guest user creation and agent install. This is the most delicate part of the integration; see [Compatibility](compatibility.md#1-cloud-init-user-data-passthrough).
+Talos reads its machine configuration from the NoCloud datasource, but **not** from the config drive Morpheus writes. Morpheus does not pass `config.userData` to the guest: it renders its own `#cloud-config` and folds user data into that document's `runcmd` list, and Talos discards anything beginning with `#cloud-config` — silently, as a missing config source rather than an error.
+
+So the provider serves the datasource itself, over HTTP, and points each VM at it by setting the guest's SMBIOS system serial through `config.qemuArgs`:
+
+```
+ds=nocloud-net;s=http://provider-host:9080/nocloud/<token>/
+```
+
+The serial is a per-VM setting rather than an image property, so every machine still boots the same cached image. Each machine gets a random token, minted before its VM exists and recorded in provider state, because the token is baked into SMBIOS at creation and cannot be changed afterwards.
+
+`createUser: false` and `noAgent: true` are still sent, as the correct request rather than as a mitigation: neither prevents the rewrite on a cloud whose agent install mode is `cloudInit`. `config.userData` is sent **only** when no NoCloud server is configured — with one in use it delivers nothing, while writing the join token onto a drive readable by anyone with access to the instance.
+
+This is the most delicate part of the integration; see [Compatibility](compatibility.md#1-cloud-init-user-data-passthrough-confirmed-broken-worked-around) and [Security](../SECURITY.md#nocloud-config-server).
