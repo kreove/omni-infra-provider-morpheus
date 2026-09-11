@@ -5,7 +5,9 @@ A community infrastructure provider that lets [Sidero Omni](https://docs.siderol
 > [!IMPORTANT]
 > This project is community maintained and is not an official Sidero Labs or HPE product. It is an **alpha release**, ported from [omni-infra-provider-vergeos](https://github.com/kreove/omni-infra-provider-vergeos) and [omni-infra-provider-xoa](https://github.com/kreove/omni-infra-provider-xoa).
 >
-> Unlike those two, this port has **not yet been exercised against a live Morpheus appliance**. The API contract was derived from the official [Morpheus Go SDK](https://github.com/gomorpheus/morpheus-go-sdk), the [Morpheus Terraform provider](https://github.com/gomorpheus/terraform-provider-morpheus) and the published [API reference](https://apidocs.morpheusdata.com/reference/addinstance), and it is covered by unit tests, but expect to need adjustments on first contact. See [Compatibility and limitations](docs/compatibility.md) for what is known-uncertain.
+> It has been exercised against a live Morpheus appliance with an MVM cloud: a two-machine Talos v1.13.10 cluster provisioned, joined Omni and came up. Deprovisioning, scale-down and provider restart mid-boot have not been observed. See [Compatibility and limitations](docs/compatibility.md) for what is covered and what is not.
+>
+> One genuine incompatibility was found and worked around: Morpheus does not pass cloud-init user data to the guest, so the provider serves the Talos config itself over HTTP. That needs `NOCLOUD_SERVER_URL` set and the port reachable from the VM network.
 
 ## Features
 
