@@ -240,9 +240,14 @@ func (p *Provisioner) syncMachine(
 		// Reported rather than retried: Morpheus has finished and failed, so
 		// polling it again cannot change the outcome. The instance is left in
 		// place for an operator to inspect, and removed on deprovision.
+		//
+		// The reason is pulled out of Morpheus and put in the error, so it
+		// reaches the Machine Request in Omni. Without that the operator is
+		// told only that something failed and sent to another UI to find out
+		// what -- which is what happened, six machines in a row.
 		return fmt.Errorf(
-			"Morpheus instance %q (id %d) failed to provision; inspect it in Morpheus for the underlying error",
-			instance.Name, instance.ID,
+			"Morpheus instance %q (id %d) failed to provision: %s",
+			instance.Name, instance.ID, p.describeInstanceFailure(ctx, logger, instance),
 		)
 	case instanceStatusStopped:
 		if err = p.client.StartInstance(ctx, instance.ID); err != nil {
@@ -614,4 +619,129 @@ func unmarshalProviderData(pctx provision.Context[*resources.Machine]) (data.Dat
 	applyDefaults(&providerData)
 
 	return providerData, nil
+}
+
+// failureDetailLimit caps how much of Morpheus's explanation is carried into
+// the error. It lands in a Machine Request status in Omni, which is read in a
+// UI, not a log file.
+const failureDetailLimit = 800
+
+// describeInstanceFailure assembles why Morpheus failed an instance, from the
+// sources it offers, most specific first.
+//
+// The instance's own errorMessage and statusMessage are read from the object
+// already in hand. The provisioning history is fetched on top of that,
+// because the status message is frequently just "Provision failed" while the
+// step that failed, and what it said, is only in the history. A history
+// lookup that itself fails is reported alongside whatever else was found,
+// never in place of it.
+func (p *Provisioner) describeInstanceFailure(ctx context.Context, logger *zap.Logger, instance *Instance) string {
+	var parts []string
+
+	// The instance in hand came from a listing, which may carry only the
+	// summary fields. Re-read it by ID so the messages are present.
+	if full, err := p.client.GetInstance(ctx, instance.ID); err == nil {
+		instance = full
+	} else {
+		logger.Warn("failed to re-read failed Morpheus instance",
+			zap.Int("instance_id", instance.ID), zap.Error(err))
+	}
+
+	if step := p.failedStep(ctx, logger, instance.ID); step != "" {
+		parts = append(parts, step)
+	}
+
+	// Morpheus populates one, the other, or both, and they are sometimes the
+	// same text. Take errorMessage first as the more specific of the two and
+	// skip statusMessage if it adds nothing.
+	if msg := strings.TrimSpace(instance.ErrorMessage); msg != "" {
+		parts = append(parts, msg)
+	}
+
+	if msg := strings.TrimSpace(instance.StatusMessage); msg != "" && !containsFold(parts, msg) {
+		parts = append(parts, msg)
+	}
+
+	if len(parts) == 0 {
+		return "Morpheus gave no reason; inspect the instance's history in Morpheus"
+	}
+
+	return truncate(strings.Join(parts, " / "), failureDetailLimit)
+}
+
+// failedStep finds the most recent history entry that carries an error, and
+// names the step it belongs to.
+func (p *Provisioner) failedStep(ctx context.Context, logger *zap.Logger, instanceID int) string {
+	processes, err := p.client.GetInstanceHistory(ctx, instanceID)
+	if err != nil {
+		// Not fatal: the instance's own messages may still say enough. It is
+		// logged so a persistent history failure is visible somewhere.
+		logger.Warn("failed to read Morpheus provisioning history",
+			zap.Int("instance_id", instanceID), zap.Error(err))
+
+		return ""
+	}
+
+	// Newest last, so walk backwards: the most recent failure is the one that
+	// matters, and an earlier step that recovered is noise.
+	for i := len(processes) - 1; i >= 0; i-- {
+		process := processes[i]
+
+		events := process.AllEvents()
+		for j := len(events) - 1; j >= 0; j-- {
+			if detail := firstNonEmptyString(events[j].Error, events[j].Message); detail != "" && isFailureStatus(events[j].Status) {
+				return describeStep(process, events[j].DisplayName, detail)
+			}
+		}
+
+		if detail := firstNonEmptyString(process.Error, process.Message); detail != "" && isFailureStatus(process.Status) {
+			return describeStep(process, "", detail)
+		}
+	}
+
+	return ""
+}
+
+func describeStep(process Process, eventName, detail string) string {
+	name := firstNonEmptyString(process.DisplayName, process.ProcessType)
+	if eventName != "" && !strings.EqualFold(eventName, name) {
+		name += " / " + eventName
+	}
+
+	// Morpheus wraps step output in newlines and indentation that reads badly
+	// in a one-line status.
+	detail = strings.Join(strings.Fields(detail), " ")
+
+	if name == "" {
+		return detail
+	}
+
+	return name + ": " + detail
+}
+
+func isFailureStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "error", "errored", "cancelled", "canceled":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsFold(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if strings.Contains(strings.ToLower(s), strings.ToLower(needle)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+
+	return s[:limit] + "..."
 }

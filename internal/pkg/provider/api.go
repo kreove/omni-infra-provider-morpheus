@@ -54,6 +54,47 @@ type Instance struct {
 	UUID   string `json:"uuid"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
+
+	// StatusMessage and ErrorMessage are what Morpheus itself says about a
+	// failed instance. Its UI prints both; the API returns them on the
+	// instance, so they cost nothing extra to read.
+	StatusMessage string `json:"statusMessage"`
+	ErrorMessage  string `json:"errorMessage"`
+}
+
+// Process is one entry in an instance's provisioning history: a step such as
+// "provision" or "deploy", with the events that made it up.
+type Process struct {
+	ID          int    `json:"id"`
+	ProcessType string `json:"processType"`
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Error       string `json:"error"`
+	Output      string `json:"output"`
+
+	// Morpheus spells the event list two ways depending on version. Both are
+	// decoded; AllEvents returns whichever was populated.
+	Events        []ProcessEvent `json:"events"`
+	ProcessEvents []ProcessEvent `json:"processEvents"`
+}
+
+// AllEvents returns the process's events under whichever key Morpheus used.
+func (p Process) AllEvents() []ProcessEvent {
+	if len(p.Events) > 0 {
+		return p.Events
+	}
+
+	return p.ProcessEvents
+}
+
+// ProcessEvent is one step within a Process.
+type ProcessEvent struct {
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Error       string `json:"error"`
+	Output      string `json:"output"`
 }
 
 // VirtualImage is the subset of a Morpheus virtual image this provider acts on.
@@ -131,6 +172,27 @@ func (c *Client) GetInstance(ctx context.Context, id int) (*Instance, error) {
 	}
 
 	return result.Instance, nil
+}
+
+// GetInstanceHistory returns an instance's provisioning history, newest last.
+//
+// This is where Morpheus records why a provision failed. The instance's own
+// status message is often just "Provision failed"; the step that actually
+// failed, and what it said, is in here.
+func (c *Client) GetInstanceHistory(ctx context.Context, id int) ([]Process, error) {
+	var result struct {
+		Processes []Process `json:"processes"`
+	}
+
+	if err := c.do(ctx, request{
+		method: http.MethodGet,
+		path:   "/api/instances/" + itoa(id) + "/history",
+		out:    &result,
+	}); err != nil {
+		return nil, err
+	}
+
+	return result.Processes, nil
 }
 
 // CreateInstance provisions a new instance and returns it.

@@ -88,11 +88,19 @@ A failed import is dropped from the in-memory cache so the next Machine Request 
 
 ## Provisioning problems
 
-### `Morpheus instance "..." failed to provision`
+### `Morpheus instance "..." failed to provision: <reason>`
 
-Morpheus finished and failed. The provider stops retrying, because polling cannot change the outcome, and leaves the instance in place so you can inspect it. Open the instance in Morpheus and read its history/logs.
+Morpheus finished and failed. The provider stops retrying, because polling cannot change the outcome, and leaves the instance in place so you can inspect it.
 
-Common causes: no capacity in the resource pool, a network the layout cannot attach, or a service plan incompatible with the layout.
+The reason after the colon is Morpheus's own: the provider reads the instance's provisioning history and its status and error messages, and carries the most recent failed step into the Machine Request status in Omni. It looks like:
+
+```
+Morpheus instance "cluster-01-prod-workers-86m9mq" (id 430) failed to provision: Provision / Create VM: UEFI firmware not available on host hvm-node-02 / Provision failed
+```
+
+The first part names the step and what it said; anything after a ` / ` is the instance's general status message, kept because it is occasionally the only thing Morpheus fills in. If it says *"Morpheus gave no reason"*, the appliance recorded nothing at all — open the instance in Morpheus and check its History tab, and its host's own logs.
+
+Common causes: no capacity in the resource pool, a network the layout cannot attach on the target hosts, a datastore that does not exist on this cluster, a service plan incompatible with the layout, or `uefi: true` on hosts without UEFI guest firmware.
 
 ### Nodes boot but never join Omni
 
