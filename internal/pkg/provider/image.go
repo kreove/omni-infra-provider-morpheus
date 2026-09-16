@@ -54,6 +54,9 @@ const (
 	imageReadyTimeout = 30 * time.Minute
 
 	imageReadyPollInterval = 15 * time.Second
+
+	// imageDiscardTimeout bounds the removal of a record whose import failed.
+	imageDiscardTimeout = time.Minute
 )
 
 // imageBuild tracks an in-progress or finished image import for one
@@ -174,30 +177,39 @@ func mediaSpecFor(providerData data.Data) (provision.MediaSpec, error) {
 
 // resolveExistingImage looks up an operator-supplied virtual image.
 func (p *Provisioner) resolveExistingImage(ctx context.Context, ref data.Ref) (*VirtualImage, error) {
-	if ref.ID > 0 {
-		image, err := p.client.GetVirtualImage(ctx, ref.ID)
+	id := ref.ID
+
+	if id < 1 {
+		name := strings.TrimSpace(ref.Name)
+
+		images, err := p.client.ListVirtualImagesByName(ctx, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve Morpheus virtual image %d: %w", ref.ID, err)
+			return nil, fmt.Errorf("failed to resolve Morpheus virtual image %q: %w", name, err)
 		}
 
-		return image, nil
+		switch len(images) {
+		case 1:
+			id = images[0].ID
+		case 0:
+			return nil, fmt.Errorf("Morpheus virtual image %q does not exist", name)
+		default:
+			return nil, fmt.Errorf("multiple Morpheus virtual images are named %q; set image.id instead", name)
+		}
 	}
 
-	name := strings.TrimSpace(ref.Name)
-
-	images, err := p.client.ListVirtualImagesByName(ctx, name)
+	// Read by ID even after a name match: only that carries the file list.
+	image, err := p.client.GetVirtualImage(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve Morpheus virtual image %q: %w", name, err)
+		return nil, fmt.Errorf("failed to resolve Morpheus virtual image %d: %w", id, err)
 	}
 
-	switch len(images) {
-	case 1:
-		return &images[0], nil
-	case 0:
-		return nil, fmt.Errorf("Morpheus virtual image %q does not exist", name)
-	default:
-		return nil, fmt.Errorf("multiple Morpheus virtual images are named %q; set image.id instead", name)
+	// A pinned image is the operator's, so it is only ever reported on, never
+	// removed -- unlike a cached one.
+	if !image.HasFile() {
+		return nil, fmt.Errorf("Morpheus virtual image %q (id %d) has no image file; upload one or pin a different image", image.Name, image.ID)
 	}
+
+	return image, nil
 }
 
 // ensureCachedImage returns the cached image for cacheName, starting an import
@@ -233,10 +245,23 @@ func (p *Provisioner) ensureCachedImage(
 
 			return 0, false, fmt.Errorf("multiple Morpheus virtual images are named %q", cacheName)
 		case len(images) == 1:
-			build.mu.Lock()
-			build.done = true
-			build.imageID = images[0].ID
-			build.mu.Unlock()
+			usable, err := p.reclaimCachedImage(ctx, logger, cacheName, images[0].ID)
+			if err != nil {
+				p.imageBuilds.Delete(cacheName)
+
+				return 0, false, err
+			}
+
+			if usable {
+				build.mu.Lock()
+				build.done = true
+				build.imageID = images[0].ID
+				build.mu.Unlock()
+
+				break
+			}
+
+			fallthrough
 		default:
 			// The media URL is deliberately absent from this line: it can
 			// carry credentials or a download token.
@@ -271,6 +296,63 @@ func (p *Provisioner) ensureCachedImage(
 }
 
 // runImageBuild performs the import and records the outcome on build.
+// reclaimCachedImage decides whether an existing cached image can be
+// provisioned from, removing it when it cannot.
+//
+// The cache is keyed by name alone, and a name can survive an import that did
+// not: a provider stopped between creating the record and finishing the
+// upload leaves a record with no file behind, and one that Morpheus failed to
+// process keeps its name too. Trusting the name then makes every later machine
+// on that Talos version fail the same way, with nothing to clear it. Such a
+// record is deleted here so the caller imports afresh.
+func (p *Provisioner) reclaimCachedImage(ctx context.Context, logger *zap.Logger, cacheName string, id int) (bool, error) {
+	image, err := p.client.GetVirtualImage(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect cached Morpheus virtual image %q (id %d): %w", cacheName, id, err)
+	}
+
+	var reason string
+
+	switch {
+	case isImageFailed(image):
+		reason = fmt.Sprintf("Morpheus reports it as %q", image.Status)
+	case !image.HasFile():
+		reason = "it has no image file, which is what an interrupted upload leaves behind"
+	default:
+		return true, nil
+	}
+
+	logger.Warn(
+		"discarding unusable cached Talos image",
+		zap.String("name", cacheName),
+		zap.Int("id", id),
+		zap.String("reason", reason),
+	)
+
+	if err = p.client.DeleteVirtualImage(ctx, id); err != nil {
+		return false, fmt.Errorf(
+			"cached Morpheus virtual image %q (id %d) is unusable (%s) and could not be removed: %w; delete it in Morpheus",
+			cacheName, id, reason, err,
+		)
+	}
+
+	return false, nil
+}
+
+// discardImage removes an image record the import could not complete, so the
+// cache lookup does not find it next time and provision machines from it.
+func (p *Provisioner) discardImage(ctx context.Context, id int, cause error) error {
+	// The cause may be that ctx expired, and the cleanup still has to happen.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageDiscardTimeout)
+	defer cancel()
+
+	if err := p.client.DeleteVirtualImage(ctx, id); err != nil {
+		return fmt.Errorf("%w (the incomplete virtual image %d could not be removed either: %v)", cause, id, err)
+	}
+
+	return cause
+}
+
 func (p *Provisioner) runImageBuild(providerData data.Data, source imageSource, cacheName string, build *imageBuild) {
 	// Detached from the request context on purpose: the provisioning step that
 	// started this returns immediately, and cancelling its context must not
@@ -336,22 +418,17 @@ func (p *Provisioner) importImage(
 
 	filename := cacheName + "." + providerData.ImageFormat
 
+	// An image record with no file is worse than no record: the name lookup
+	// finds it on the next reconcile and every machine provisions from an
+	// empty image. Remove it on any failure from here on so the import is
+	// retried cleanly. The cache lookup also checks for this state, because a
+	// provider stopped mid-upload never reaches this code.
 	if err = p.client.UploadVirtualImageFile(ctx, image.ID, filename, localPath, imageUploadTimeout); err != nil {
-		// An image record with no file is worse than no record: the name
-		// lookup finds it on the next reconcile and every machine provisions
-		// from an empty image. Remove it so the import is retried cleanly.
-		if deleteErr := p.client.DeleteVirtualImage(ctx, image.ID); deleteErr != nil {
-			return 0, fmt.Errorf(
-				"failed to upload Talos image into Morpheus: %w (the incomplete virtual image %d could not be removed either: %v)",
-				err, image.ID, deleteErr,
-			)
-		}
-
-		return 0, fmt.Errorf("failed to upload Talos image into Morpheus: %w", err)
+		return 0, p.discardImage(ctx, image.ID, fmt.Errorf("failed to upload Talos image into Morpheus: %w", err))
 	}
 
 	if err = p.waitForImageReady(ctx, image.ID); err != nil {
-		return 0, err
+		return 0, p.discardImage(ctx, image.ID, err)
 	}
 
 	return image.ID, nil

@@ -82,9 +82,21 @@ If it never completes:
 
 Morpheus rejected the uploaded image. Inspect the virtual image in the Morpheus UI. The most likely cause is a format the appliance cannot convert; try the other `image_format`.
 
+### `Cloud files could not be found for omni-talos-...`
+
+Morpheus's wording for a virtual image record that has no image file behind it. Every machine on that Talos version and schematic fails this way, while other versions provision fine, because they all resolve to the same cached record.
+
+It is what an interrupted import leaves behind: the provider was stopped, or lost its connection, between creating the record and finishing the upload. The record looks complete from every other field, so a name lookup found it and reused it.
+
+The provider now checks for this on every cache lookup: a cached image with no file, or one Morpheus marks failed, is logged as `discarding unusable cached Talos image`, deleted, and imported again. No action is needed beyond letting the next Machine Request run — unless the delete fails, in which case the error names the image and asks you to remove it in Morpheus.
+
+If a hand-pinned `image` is in this state the provider refuses it with *"has no image file"* and leaves it alone; upload a file to it or pin another image.
+
 ### An import failed and now every machine fails
 
-A failed import is dropped from the in-memory cache so the next Machine Request retries it cleanly. If an *incomplete* virtual image record was left behind in Morpheus, the provider deletes it as part of handling the failure — but if that deletion also failed, the error says so and names the image ID. Delete it by hand, or the name lookup will keep finding an empty image and every machine will provision from it.
+A failed import is dropped from the in-memory cache so the next Machine Request retries it cleanly. The virtual image record it created is deleted as part of handling the failure — on an upload error, and on Morpheus reporting the image failed or never ready — and if that deletion also fails, the error says so and names the image ID.
+
+An empty record that nonetheless survived (the provider was killed mid-import, say) is caught by the cache lookup instead; see [above](#cloud-files-could-not-be-found-for-omni-talos-).
 
 ## Provisioning problems
 

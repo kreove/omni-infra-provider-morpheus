@@ -115,6 +115,8 @@ After upload, Morpheus processes an image asynchronously. The provider polls the
 
 An import and a later cache hit have both been observed working. The tolerance is kept because it is what makes the check version-independent; if imports hang at "waiting" on your appliance, check what it reports in `status`.
 
+The one thing readiness is *not* allowed to be lenient about is the file itself. Morpheus lists an image's files beside the record (`cloudFiles` on a single-image read; older appliances say `files`), and an image without one is provisioned from freely, failing every instance with *"Cloud files could not be found"*. That was observed live: a record left behind by an import interrupted during a network outage was reused by six machines in a row. The cache lookup now treats such a record, or one marked failed, as absent — deleting it and importing again — and any import failure after the record is created removes the record.
+
 ### 6. Boot firmware (settled)
 
 The Talos nocloud image boots under both BIOS and UEFI, so `uefi` is left unset by default and the platform default applies. A machine has booted and joined under the MVM default with `uefi` unset. If VMs power on and immediately halt without console output, set `uefi: true` (or `false`) explicitly.
