@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -104,6 +105,40 @@ type VirtualImage struct {
 	ImageType string `json:"imageType"`
 	Status    string `json:"status"`
 	RawSize   int64  `json:"rawSize"`
+
+	// Files are the image files Morpheus holds for this record. Morpheus
+	// reports them beside the record rather than inside it, and only when a
+	// single image is fetched by ID, so they are populated by GetVirtualImage
+	// and absent from list results.
+	Files []VirtualImageFile `json:"-"`
+}
+
+// VirtualImageFile is one file held for a virtual image.
+type VirtualImageFile struct {
+	Name string `json:"name"`
+	// ContentLength is the size in bytes on current appliances; older ones
+	// report Size instead. Either may be zero when the other is set.
+	ContentLength int64 `json:"contentLength"`
+	Size          int64 `json:"size"`
+}
+
+// HasFile reports whether Morpheus holds at least one file for the image.
+//
+// A record without a file is what an interrupted upload leaves behind. It
+// looks complete from every other field -- name, status, even a size -- and
+// provisioning from it fails with "Cloud files could not be found".
+func (v *VirtualImage) HasFile() bool {
+	if v == nil {
+		return false
+	}
+
+	for _, file := range v.Files {
+		if strings.TrimSpace(file.Name) != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ResourcePoolOption is one entry from the zonePools option source.
@@ -279,8 +314,12 @@ func (c *Client) ListVirtualImagesByName(ctx context.Context, name string) ([]Vi
 
 // GetVirtualImage reads a single virtual image by ID.
 func (c *Client) GetVirtualImage(ctx context.Context, id int) (*VirtualImage, error) {
+	// The file list sits next to the record, under a key that has changed
+	// name across Morpheus versions; the CLI reads both, so this does too.
 	var result struct {
-		VirtualImage *VirtualImage `json:"virtualImage"`
+		VirtualImage *VirtualImage      `json:"virtualImage"`
+		CloudFiles   []VirtualImageFile `json:"cloudFiles"`
+		Files        []VirtualImageFile `json:"files"`
 	}
 
 	if err := c.do(ctx, request{
@@ -293,6 +332,11 @@ func (c *Client) GetVirtualImage(ctx context.Context, id int) (*VirtualImage, er
 
 	if result.VirtualImage == nil {
 		return nil, fmt.Errorf("Morpheus returned no virtual image for ID %d", id)
+	}
+
+	result.VirtualImage.Files = result.CloudFiles
+	if len(result.VirtualImage.Files) == 0 {
+		result.VirtualImage.Files = result.Files
 	}
 
 	return result.VirtualImage, nil

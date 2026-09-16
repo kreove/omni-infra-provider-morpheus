@@ -71,4 +71,6 @@ Instances are labelled `omni-managed`, so Omni-managed VMs can be told apart fro
 
 Cached images are deliberately retained — they are the reason machines after the first provision quickly. If you want to reclaim the space, delete `omni-talos-*` virtual images in Morpheus once no machine depends on them. The provider re-imports on demand.
 
+The provider also removes a cached image on its own when it finds one it cannot use — a record with no file behind it, or one Morpheus marks failed — and imports it again. It never removes an image you pinned with `image`.
+
 Each image's description records the Talos version, architecture, format and schematic ID — what you actually need when deciding whether a cached image is still wanted. (The download URL is deliberately not recorded: it can carry credentials.)
