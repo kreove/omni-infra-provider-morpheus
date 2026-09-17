@@ -114,12 +114,17 @@ type VirtualImage struct {
 }
 
 // VirtualImageFile is one file held for a virtual image.
+//
+// Only the name is relied on. The sizes are decoded as floats because
+// Morpheus reports Size in fractional gigabytes (0.2169... for a Talos
+// qcow2), and a stricter type here failed every cache lookup on a real
+// appliance.
 type VirtualImageFile struct {
 	Name string `json:"name"`
-	// ContentLength is the size in bytes on current appliances; older ones
-	// report Size instead. Either may be zero when the other is set.
-	ContentLength int64 `json:"contentLength"`
-	Size          int64 `json:"size"`
+	// ContentLength is the size in bytes; Size is the same in gigabytes,
+	// and the only one of the two older appliances report.
+	ContentLength float64 `json:"contentLength"`
+	Size          float64 `json:"size"`
 }
 
 // HasFile reports whether Morpheus holds at least one file for the image.
