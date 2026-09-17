@@ -156,6 +156,30 @@ func TestGetVirtualImageReadsFilesBesideTheRecord(t *testing.T) {
 	}
 }
 
+// The sizes are what a real appliance returns: contentLength in bytes, size
+// in fractional gigabytes. Decoding must not trip on either.
+func TestGetVirtualImageDecodesRealFileSizes(t *testing.T) {
+	s, p := newCacheServer(t)
+	s.images[215] = map[string]any{
+		"virtualImage": map[string]any{"id": 215, "name": "omni-talos-5212b1", "status": "Active"},
+		"cloudFiles": []map[string]any{{
+			"name":          "omni-talos-5212b1.qcow2",
+			"contentLength": 232841216,
+			"size":          0.21691131591796875,
+			"dateModified":  "2026-09-16T20:11:04Z",
+		}},
+	}
+
+	image, err := p.client.GetVirtualImage(context.Background(), 215)
+	if err != nil {
+		t.Fatalf("a real appliance's file list must decode: %v", err)
+	}
+
+	if !image.HasFile() || image.Files[0].ContentLength != 232841216 {
+		t.Fatalf("unexpected file list %+v", image.Files)
+	}
+}
+
 func TestGetVirtualImageFallsBackToFilesKey(t *testing.T) {
 	s, p := newCacheServer(t)
 	s.images[7] = map[string]any{
